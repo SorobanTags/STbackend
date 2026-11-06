@@ -25,7 +25,14 @@ describe('SearchController', () => {
       const result = { hits: [] };
       mockSearchService.search.mockReturnValue(result);
 
-      expect(controller.search('rust', 'dev', 'Beginner', 'en', 2, 5)).toBe(result);
+      expect(controller.search({
+        query: 'rust',
+        category: 'dev',
+        level: 'Beginner',
+        language: 'en',
+        page: 2,
+        limit: 5,
+      })).toBe(result);
       expect(mockSearchService.search).toHaveBeenCalledWith({
         query: 'rust',
         category: 'dev',
@@ -37,7 +44,7 @@ describe('SearchController', () => {
     });
 
     it('defaults page to 1 and limit to 20', () => {
-      controller.search('rust');
+      controller.search({ query: 'rust' });
       expect(mockSearchService.search).toHaveBeenCalledWith({
         query: 'rust',
         category: undefined,

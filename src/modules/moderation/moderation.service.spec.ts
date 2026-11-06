@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ModerationService, DEFAULT_UNPUBLISH_THRESHOLD } from './moderation.service';
+import { ModerationService } from './moderation.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ReportCategory, ReportTargetType, ReportStatus, CourseStatus } from '@prisma/client';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';

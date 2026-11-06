@@ -5,7 +5,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { FeeCalculatorService } from '../billing/fee-calculator.service';
 import { SearchService } from '../search/search.service';
 import { CacheService } from '../../common/cache/cache.service';
-import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CourseStatus } from '@prisma/client';
 
 const mockPrisma = {
@@ -17,6 +17,11 @@ const mockPrisma = {
     update:     jest.fn(),
     updateMany: jest.fn(),
     groupBy:    jest.fn(),
+  },
+  coursePrerequisite: {
+    findMany: jest.fn(),
+    deleteMany: jest.fn(),
+    createMany: jest.fn(),
   },
   user: {
     findUnique: jest.fn(),
@@ -225,25 +230,27 @@ describe('CoursesService', () => {
   describe('setPrerequisites()', () => {
     it('rejects a direct cycle (A requires B requires A)', async () => {
       mockPrisma.course.findUnique.mockResolvedValue(MOCK_COURSE);
-      mockPrisma.course.findMany.mockResolvedValue([
-        { id: 'A', prerequisites: [{ prerequisiteId: 'B' }] },
-        { id: 'B', prerequisites: [{ prerequisiteId: 'A' }] },
+      mockPrisma.course.findMany.mockResolvedValue([{ id: 'B', title: 'B' }]);
+      mockPrisma.coursePrerequisite.findMany.mockResolvedValue([
+        { courseId: 'A', prerequisiteId: 'B' },
+        { courseId: 'B', prerequisiteId: 'A' },
       ]);
 
-      await expect(service.setPrerequisites('A', ['B'] as any))
-        .rejects.toThrow(BadRequestException);
+      await expect(service.setPrerequisites('A', { prerequisiteIds: ['B'] } as any))
+        .rejects.toThrow(ConflictException);
     });
 
     it('rejects an indirect cycle (A->B->C->A)', async () => {
       mockPrisma.course.findUnique.mockResolvedValue(MOCK_COURSE);
-      mockPrisma.course.findMany.mockResolvedValue([
-        { id: 'A', prerequisites: [{ prerequisiteId: 'B' }] },
-        { id: 'B', prerequisites: [{ prerequisiteId: 'C' }] },
-        { id: 'C', prerequisites: [{ prerequisiteId: 'A' }] },
+      mockPrisma.course.findMany.mockResolvedValue([{ id: 'B', title: 'B' }]);
+      mockPrisma.coursePrerequisite.findMany.mockResolvedValue([
+        { courseId: 'A', prerequisiteId: 'B' },
+        { courseId: 'B', prerequisiteId: 'C' },
+        { courseId: 'C', prerequisiteId: 'A' },
       ]);
 
-      await expect(service.setPrerequisites('A', ['B'] as any))
-        .rejects.toThrow(BadRequestException);
+      await expect(service.setPrerequisites('A', { prerequisiteIds: ['B'] } as any))
+        .rejects.toThrow(ConflictException);
     });
   });
 });

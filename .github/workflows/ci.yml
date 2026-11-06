@@ -36,16 +36,19 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          node-version-file: ".nvmrc"
+          cache: "npm"
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
 
       - name: Run linter
         run: npm run lint
@@ -65,10 +68,16 @@ jobs:
         run: npx prisma migrate deploy
 
       - name: Check Prisma schema drift
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/slbackend_test
+          SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/slbackend_shadow
+          PGPASSWORD: postgres
         run: |
+          createdb -h localhost -p 5432 -U postgres slbackend_shadow
           npx prisma migrate diff \
             --from-migrations prisma/migrations \
             --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "$SHADOW_DATABASE_URL" \
             --exit-code
 
       - name: Build project

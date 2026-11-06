@@ -1,6 +1,6 @@
 import {
   Injectable, NotFoundException, BadRequestException,
-  ForbiddenException, Logger,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';

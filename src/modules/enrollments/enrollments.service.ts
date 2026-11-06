@@ -6,7 +6,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { ReferralsService } from '../referrals/referrals.service';
-import { NotificationType, Prisma } from '@prisma/client';
+import { EnrollmentStatus, NotificationType, Prisma } from '@prisma/client';
 import { FraudDetectionService } from './fraud-detection.service';
 import { DripScheduleService } from '../lessons/drip-schedule.service';
 
@@ -233,7 +233,135 @@ export class EnrollmentsService {
     return count > 0;
   }
 
-  // ----------------------------------------------------------
- 
+  async findByCourse(courseId: string, page = 1, limit = 20) {
+    const [enrollments, total] = await this.prisma.$transaction([
+      this.prisma.enrollment.findMany({
+        where: { courseId },
+        include: {
+          student: { select: { id: true, name: true, stellarAddress: true } },
+        },
+        orderBy: { enrolledAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.enrollment.count({ where: { courseId } }),
+    ]);
 
-/* … truncated 4549 chars — edit only what you need near the top … */
+    return { data: enrollments, meta: { total, page, limit } };
+  }
+
+  async checkPrerequisites(studentId: string, courseId: string) {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true, title: true },
+    });
+    if (!course) throw new NotFoundException(`Course ${courseId} not found`);
+
+    const prerequisites = await this.prisma.coursePrerequisite.findMany({
+      where: { courseId },
+      include: { prerequisite: { select: { id: true, title: true } } },
+    });
+    if (prerequisites.length === 0) {
+      return { courseId, eligible: true, missing: [], satisfied: [] };
+    }
+
+    const completed = await this.prisma.enrollment.findMany({
+      where: {
+        studentId,
+        status: EnrollmentStatus.COMPLETED,
+        courseId: { in: prerequisites.map(({ prerequisiteId }) => prerequisiteId) },
+      },
+      select: { courseId: true },
+    });
+    const completedIds = new Set(completed.map(({ courseId: completedCourseId }) => completedCourseId));
+    const rows = prerequisites.map(({ prerequisite }) => ({
+      courseId: prerequisite.id,
+      title: prerequisite.title,
+      met: completedIds.has(prerequisite.id),
+    }));
+
+    return {
+      courseId,
+      eligible: rows.every(({ met }) => met),
+      missing: rows.filter(({ met }) => !met),
+      satisfied: rows.filter(({ met }) => met),
+    };
+  }
+
+  async upsertFromBackup(data: {
+    id?: string;
+    studentId: string;
+    courseId: string;
+    amountPaid: number;
+    txHash?: string | null;
+    status?: EnrollmentStatus;
+    progressPercent?: number;
+    completedAt?: Date | null;
+    enrolledAt?: Date;
+    mode: 'create' | 'overwrite' | 'merge';
+  }) {
+    const existing = await this.prisma.enrollment.findUnique({
+      where: {
+        studentId_courseId: {
+          studentId: data.studentId,
+          courseId: data.courseId,
+        },
+      },
+    });
+
+    if (!existing) {
+      const enrollment = await this.prisma.enrollment.create({
+        data: {
+          ...(data.id ? { id: data.id } : {}),
+          studentId: data.studentId,
+          courseId: data.courseId,
+          amountPaid: data.amountPaid,
+          txHash: data.txHash ?? null,
+          status: data.status ?? EnrollmentStatus.ACTIVE,
+          progressPercent: data.progressPercent ?? 0,
+          completedAt: data.completedAt ?? null,
+          ...(data.enrolledAt ? { enrolledAt: data.enrolledAt } : {}),
+        },
+      });
+      this.logger.log(`Restored enrollment created: ${enrollment.studentId} -> ${enrollment.courseId}`);
+      return { enrollment, action: 'created' as const };
+    }
+
+    if (data.mode === 'create') {
+      return { enrollment: existing, action: 'skipped' as const };
+    }
+
+    if (data.mode === 'overwrite') {
+      const enrollment = await this.prisma.enrollment.update({
+        where: { id: existing.id },
+        data: {
+          amountPaid: data.amountPaid,
+          txHash: data.txHash ?? null,
+          status: data.status ?? existing.status,
+          progressPercent: data.progressPercent ?? 0,
+          completedAt: data.completedAt ?? null,
+          ...(data.enrolledAt ? { enrolledAt: data.enrolledAt } : {}),
+        },
+      });
+      return { enrollment, action: 'overwritten' as const };
+    }
+
+    const incomingProgress = data.progressPercent ?? 0;
+    const preferIncoming = incomingProgress >= existing.progressPercent;
+    const enrollment = await this.prisma.enrollment.update({
+      where: { id: existing.id },
+      data: {
+        amountPaid: preferIncoming ? data.amountPaid : existing.amountPaid,
+        txHash: data.txHash ?? existing.txHash,
+        status: preferIncoming ? (data.status ?? existing.status) : existing.status,
+        progressPercent: Math.max(existing.progressPercent, incomingProgress),
+        completedAt: preferIncoming ? (data.completedAt ?? existing.completedAt) : existing.completedAt,
+        enrolledAt:
+          data.enrolledAt && data.enrolledAt < existing.enrolledAt
+            ? data.enrolledAt
+            : existing.enrolledAt,
+      },
+    });
+    return { enrollment, action: 'merged' as const };
+  }
+}

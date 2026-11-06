@@ -1,14 +1,17 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-import { MailService } from '../mail/mail.service';
+import { NotificationType } from '@prisma/client';
+import { NotificationsService } from './notifications.service';
 import { NOTIFICATION_EMAIL_QUEUE } from '../../common/queue/queue.constants';
 
 export interface NotificationEmailJobData {
+  userId: string;
+  notificationId: string;
   to: string;
   subject: string;
-  template: string;
-  context?: Record<string, unknown>;
+  text: string;
+  type: NotificationType;
 }
 
 /**
@@ -35,23 +38,16 @@ export const NOTIFICATION_EMAIL_JOB_OPTIONS = {
 export class NotificationEmailProcessor extends WorkerHost {
   private readonly logger = new Logger(NotificationEmailProcessor.name);
 
-  constructor(private readonly mailService: MailService) {
+  constructor(private readonly notificationsService: NotificationsService) {
     super();
   }
 
   async process(job: Job<NotificationEmailJobData>): Promise<void> {
-    const { to, subject, template, context } = job.data;
-
     this.logger.debug(
       `Processing notification email job ${job.id} (attempt ${job.attemptsMade + 1})`,
     );
 
-    await this.mailService.sendTemplateEmail({
-      to,
-      subject,
-      template,
-      context,
-    });
+    await this.notificationsService.processEmailJob(job.data);
   }
 
   @OnWorkerEvent('failed')

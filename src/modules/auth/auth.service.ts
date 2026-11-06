@@ -8,7 +8,7 @@ import { Keypair, StrKey } from '@stellar/stellar-sdk';
 import { SessionsService, DeviceMetadata } from './sessions.service';
 
 import { TwoFactorService } from './two-factor.service';
-import { Optional, Inject } from '@nestjs/common';
+import { Optional } from '@nestjs/common';
 
 /**
  * How many milliseconds of clock-skew between client and server we tolerate

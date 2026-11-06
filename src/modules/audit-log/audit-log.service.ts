@@ -96,7 +96,8 @@ export class AuditLogService {
     // unbounded Prisma result set in memory.
     const entries: any[] = [];
     let skip = 0;
-    while (true) {
+    let hasMore = true;
+    while (hasMore) {
       const batch = await this.prisma.adminAuditLog.findMany({
         where,
         skip,
@@ -113,7 +114,7 @@ export class AuditLogService {
         },
       });
       entries.push(...batch);
-      if (batch.length < batchSize) break;
+      hasMore = batch.length === batchSize;
       skip += batch.length;
     }
 

@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Body, Param, UseGuards, HttpCode, HttpStatus,
-  Res, NotFoundException, GoneException,
+  Res, NotFoundException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -27,36 +27,8 @@ export class CertificatesController {
   /** Public — no auth needed. Anyone can verify a certificate by ID. */
   @Get('verify/:id')
   @ApiOperation({ summary: 'Verify a certificate by ID (public, no auth required)' })
-  async verify(@Param('id') id: string) {
-    const certificate = await this.certificatesService.verify(id);
-
-    if (!certificate) {
-      throw new NotFoundException('Certificate not found');
-    }
-
-    if (certificate.isFraudHeld) {
-      return {
-        status: 'FRAUD_HELD',
-        valid: false,
-        certificate,
-      };
-    }
-
-    if (certificate.revokedAt) {
-      throw new GoneException({
-        status: 'REVOKED',
-        valid: false,
-        message: 'Certificate has been revoked',
-        revokedAt: certificate.revokedAt,
-        reason: certificate.revokeReason ?? null,
-      });
-    }
-
-    return {
-      status: 'VALID',
-      valid: true,
-      certificate,
-    };
+  verify(@Param('id') id: string) {
+    return this.certificatesService.verify(id);
   }
 
   @Get(':id')

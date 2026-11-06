@@ -38,7 +38,7 @@ describe('ReviewsController', () => {
   });
 
   it('findForCourse delegates with pagination', () => {
-    controller.findForCourse('c1', 2, 10);
+    controller.findForCourse('c1', { page: 2, limit: 10 });
     expect(mockReviewsService.findForCourse).toHaveBeenCalledWith('c1', 2, 10);
   });
 

@@ -43,6 +43,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
     GoogleStrategy,
     GoogleAuthGuard,
     OtpService,
+    RefreshTokenService,
     SessionsService,
   ],
   exports: [AuthService, OtpService, SessionsService],

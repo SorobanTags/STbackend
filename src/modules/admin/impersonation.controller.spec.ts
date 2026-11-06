@@ -38,12 +38,12 @@ describe('ImpersonationController', () => {
   });
 
   it('getAuditTrail defaults to page 1, limit 10', async () => {
-    await controller.getAuditTrail();
+    await controller.getAuditTrail({});
     expect(mockImpersonationService.getAuditTrail).toHaveBeenCalledWith(1, 10);
   });
 
   it('getAuditTrail coerces page/limit to numbers', async () => {
-    await controller.getAuditTrail('3' as any, '25' as any);
+    await controller.getAuditTrail({ page: 3, limit: 25 });
     expect(mockImpersonationService.getAuditTrail).toHaveBeenCalledWith(3, 25);
   });
 

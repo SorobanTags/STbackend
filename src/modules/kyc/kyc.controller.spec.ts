@@ -62,7 +62,7 @@ describe('KycController', () => {
 
   it('findAll delegates with page, limit, status order', async () => {
     mockKycService.findAll.mockResolvedValue({ data: [] });
-    await controller.findAll(KycStatus.PENDING, 1, 20);
+    await controller.findAll({ status: KycStatus.PENDING, page: 1, limit: 20 });
     expect(mockKycService.findAll).toHaveBeenCalledWith(1, 20, KycStatus.PENDING);
   });
 

@@ -6,7 +6,6 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 
 describe('OtpService', () => {
   let service: OtpService;
-  let prisma: PrismaService;
 
   const mockPrismaService = {
     phoneOtp: {
@@ -40,7 +39,6 @@ describe('OtpService', () => {
     }).compile();
 
     service = module.get<OtpService>(OtpService);
-    prisma = module.get<PrismaService>(PrismaService);
   });
 
   afterEach(() => {

@@ -1,14 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ValidationPipe, BadRequestException, ConflictException, INestApplication } from '@nestjs/common';
+import { ValidationPipe, ConflictException, INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { UpdateProfileDto } from './dto/update-profile.dto';
 
 describe('UsersController (UpdateProfile Validation)', () => {
   let app: INestApplication;
-  let service: UsersService;
 
   const mockUsersService = {
     findById: jest.fn(),
@@ -35,7 +33,6 @@ describe('UsersController (UpdateProfile Validation)', () => {
     app = moduleRef.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
     await app.init();
-    service = moduleRef.get<UsersService>(UsersService);
   });
 
   afterAll(async () => {

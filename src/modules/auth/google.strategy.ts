@@ -28,7 +28,6 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google', 6) {
     refreshToken: string,
     params: { id_token?: string },
     profile: Profile,
-    done: (error: Error | null, user?: unknown) => void,
   ) {
     if (!params.id_token) {
       throw new UnauthorizedException('Google did not return an ID token');

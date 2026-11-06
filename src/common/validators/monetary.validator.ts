@@ -6,9 +6,9 @@ import {
 
 const USDC_SCALE = 10_000_000;
 
-export interface IsUsdcAmountOptions extends ValidationOptions {
+export interface IsUsdcAmountOptions<T extends object = object> extends ValidationOptions {
   allowZero?: boolean;
-  condition?: (object: object) => boolean;
+  condition?: (object: T) => boolean;
 }
 
 export function isValidUsdcAmount(value: unknown, allowZero = false): value is number {
@@ -17,7 +17,9 @@ export function isValidUsdcAmount(value: unknown, allowZero = false): value is n
   return value > 0 && Number.isSafeInteger(value * USDC_SCALE);
 }
 
-export function IsUsdcAmount(options: IsUsdcAmountOptions = {}) {
+export function IsUsdcAmount<T extends object = object>(
+  options: IsUsdcAmountOptions<T> = {},
+) {
   const { allowZero = false, condition, ...validationOptions } = options;
 
   return (object: object, propertyName: string) => {
@@ -31,9 +33,12 @@ export function IsUsdcAmount(options: IsUsdcAmountOptions = {}) {
         validate(value: unknown, args: ValidationArguments) {
           const [zeroAllowed, appliesTo] = args.constraints as [
             boolean,
-            IsUsdcAmountOptions['condition'],
+            IsUsdcAmountOptions<T>['condition'],
           ];
-          return (appliesTo && !appliesTo(args.object)) || isValidUsdcAmount(value, zeroAllowed);
+          return (
+            (appliesTo && !appliesTo(args.object as T)) ||
+            isValidUsdcAmount(value, zeroAllowed)
+          );
         },
         defaultMessage() {
           return 'Amount must be positive, have at most 7 decimal places, and fit within the supported USDC range';
@@ -62,9 +67,9 @@ export function IsFutureDate(validationOptions?: ValidationOptions) {
   };
 }
 
-export function IsPercentageAtMost(
+export function IsPercentageAtMost<T extends object = object>(
   max: number,
-  condition: (object: object) => boolean,
+  condition: (object: T) => boolean,
   validationOptions?: ValidationOptions,
 ) {
   return (object: object, propertyName: string) => {
@@ -76,7 +81,7 @@ export function IsPercentageAtMost(
       options: validationOptions,
       validator: {
         validate(value: unknown, args: ValidationArguments) {
-          return !condition(args.object)
+          return !condition(args.object as T)
             || (typeof value === 'number' && Number.isFinite(value) && value <= args.constraints[0]);
         },
         defaultMessage(args: ValidationArguments) {

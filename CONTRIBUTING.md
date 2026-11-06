@@ -21,7 +21,7 @@ conventions.
 
 ## Prerequisites
 
-- **Node.js** 18+ and **npm**
+- **Node.js** 20+ and **npm** (the required major version is pinned in `.nvmrc`)
 - **PostgreSQL** (15+)
 - **Redis** (for caching, rate limiting and BullMQ job queues)
 - **Meilisearch** (optional locally, required for full-text search)
@@ -65,21 +65,21 @@ The API is then served at `http://localhost:3000/api/v1` and the Swagger UI at
 Copy `.env.example` to `.env` and adjust the values for your local setup.
 Key groups:
 
-| Group | Variables | Notes |
-| --- | --- | --- |
-| Server | `NODE_ENV`, `PORT`, `API_PREFIX`, `APP_BASE_URL`, `PUBLIC_API_URL`, `FRONTEND_URL` | API is prefixed with `API_PREFIX` (default `api/v1`) |
-| Logging / Sentry | `LOG_LEVEL`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE` | Optional error monitoring |
-| Auth | `JWT_SECRET`, `JWT_EXPIRES_IN`, `JWT_REFRESH_SECRET`, `JWT_REFRESH_EXPIRES_IN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL` | JWT secrets are required |
-| Database | `DATABASE_URL`, `PRISMA_CONNECTION_LIMIT`, `PRISMA_POOL_TIMEOUT_SECONDS` | PostgreSQL via Prisma |
-| Stellar | `STELLAR_NETWORK`, `STELLAR_RPC_URL`, `STELLAR_HORIZON_URL`, `SOROBANLARD_CONTRACT_ID`, `USDC_TOKEN_ADDRESS`, `ADMIN_STELLAR_ADDRESS`, `TREASURY_STELLAR_ADDRESS` | On-chain payment rail |
-| File storage / CDN | `UPLOAD_DIR`, `MAX_FILE_SIZE_MB`, `CDN_*` | |
-| Email / SMS | `SMTP_*`, `AFRICASTALKING_*` | |
-| Redis | `REDIS_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `QUEUE_*`, `CACHE_TTL_SECONDS` | |
-| Rate limiting | `THROTTLE_*`, `RATE_LIMIT_*`, `ROLE_THROTTLE_*` | |
-| CAPTCHA | `CAPTCHA_SECRET_KEY`, `CAPTCHA_VERIFY_URL`, `CAPTCHA_TIMEOUT_MS`, `CAPTCHA_MAX_FAILURES`, `CAPTCHA_BLOCK_DURATION_SECONDS` | Required before auth nonce issuance |
-| Fraud detection | `FRAUD_*` | See [`docs/FRAUD_DETECTION.md`](docs/FRAUD_DETECTION.md) |
-| Referrals | `REFERRAL_*` | See [`docs/REFERRAL_PROGRAM.md`](docs/REFERRAL_PROGRAM.md) |
-| Webhooks | `WEBHOOK_SECRET`, `WEBHOOK_SECRET_*` | |
+| Group              | Variables                                                                                                                                                         | Notes                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Server             | `NODE_ENV`, `PORT`, `API_PREFIX`, `APP_BASE_URL`, `PUBLIC_API_URL`, `FRONTEND_URL`                                                                                | API is prefixed with `API_PREFIX` (default `api/v1`)       |
+| Logging / Sentry   | `LOG_LEVEL`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`                                                                                                 | Optional error monitoring                                  |
+| Auth               | `JWT_SECRET`, `JWT_EXPIRES_IN`, `JWT_REFRESH_SECRET`, `JWT_REFRESH_EXPIRES_IN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`                 | JWT secrets are required                                   |
+| Database           | `DATABASE_URL`, `PRISMA_CONNECTION_LIMIT`, `PRISMA_POOL_TIMEOUT_SECONDS`                                                                                          | PostgreSQL via Prisma                                      |
+| Stellar            | `STELLAR_NETWORK`, `STELLAR_RPC_URL`, `STELLAR_HORIZON_URL`, `SOROBANLARD_CONTRACT_ID`, `USDC_TOKEN_ADDRESS`, `ADMIN_STELLAR_ADDRESS`, `TREASURY_STELLAR_ADDRESS` | On-chain payment rail                                      |
+| File storage / CDN | `UPLOAD_DIR`, `MAX_FILE_SIZE_MB`, `CDN_*`                                                                                                                         |                                                            |
+| Email / SMS        | `SMTP_*`, `AFRICASTALKING_*`                                                                                                                                      |                                                            |
+| Redis              | `REDIS_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `QUEUE_*`, `CACHE_TTL_SECONDS`                                                                         |                                                            |
+| Rate limiting      | `THROTTLE_*`, `RATE_LIMIT_*`, `ROLE_THROTTLE_*`                                                                                                                   |                                                            |
+| CAPTCHA            | `CAPTCHA_SECRET_KEY`, `CAPTCHA_VERIFY_URL`, `CAPTCHA_TIMEOUT_MS`, `CAPTCHA_MAX_FAILURES`, `CAPTCHA_BLOCK_DURATION_SECONDS`                                        | Required before auth nonce issuance                        |
+| Fraud detection    | `FRAUD_*`                                                                                                                                                         | See [`docs/FRAUD_DETECTION.md`](docs/FRAUD_DETECTION.md)   |
+| Referrals          | `REFERRAL_*`                                                                                                                                                      | See [`docs/REFERRAL_PROGRAM.md`](docs/REFERRAL_PROGRAM.md) |
+| Webhooks           | `WEBHOOK_SECRET`, `WEBHOOK_SECRET_*`                                                                                                                              |                                                            |
 
 Never commit real secrets — `.env` is git-ignored; use `.env.example` as the
 template for new variables.
@@ -118,7 +118,8 @@ instance, so make sure migrations apply cleanly before opening a PR.
 ## Lint & Format
 
 ```bash
-npm run lint   # ESLint (with --fix)
+npm run lint   # ESLint check (does not modify files)
+npm run lint:fix # Apply ESLint fixes
 npm run format # Prettier
 ```
 
@@ -156,7 +157,8 @@ Before you open a PR, please make sure that:
   (e.g. `Closes #158`).
 
 Thank you for helping build SorobanLard! 🚀
-```
+
+````
 
 Wait — the project layout mention "fraud-review" module — actual module is enrollments. Let me not invent module names. Fix: `└── modules/              # Feature modules (auth, users, courses, …, enrollments, referrals, …)`.
 
@@ -209,7 +211,7 @@ npx prisma generate
 
 # 5. Start the development server
 npm run start:dev
-```
+````
 
 ### Local infrastructure (optional)
 
@@ -227,21 +229,21 @@ The API is then served at `http://localhost:3000/api/v1` and the Swagger UI at
 Copy `.env.example` to `.env` and adjust the values for your local setup.
 Key groups:
 
-| Group | Variables | Notes |
-| --- | --- | --- |
-| Server | `NODE_ENV`, `PORT`, `API_PREFIX`, `APP_BASE_URL`, `PUBLIC_API_URL`, `FRONTEND_URL` | API is prefixed with `API_PREFIX` (default `api/v1`) |
-| Logging / Sentry | `LOG_LEVEL`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE` | Optional error monitoring |
-| Auth | `JWT_SECRET`, `JWT_EXPIRES_IN`, `JWT_REFRESH_SECRET`, `JWT_REFRESH_EXPIRES_IN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL` | JWT secrets are required |
-| Database | `DATABASE_URL`, `PRISMA_CONNECTION_LIMIT`, `PRISMA_POOL_TIMEOUT_SECONDS` | PostgreSQL via Prisma |
-| Stellar | `STELLAR_NETWORK`, `STELLAR_RPC_URL`, `STELLAR_HORIZON_URL`, `SOROBANLARD_CONTRACT_ID`, `USDC_TOKEN_ADDRESS`, `ADMIN_STELLAR_ADDRESS`, `TREASURY_STELLAR_ADDRESS` | On-chain payment rail |
-| File storage / CDN | `UPLOAD_DIR`, `MAX_FILE_SIZE_MB`, `CDN_*` | |
-| Email / SMS | `SMTP_*`, `AFRICASTALKING_*` | |
-| Redis | `REDIS_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `QUEUE_*`, `CACHE_TTL_SECONDS` | |
-| Rate limiting | `THROTTLE_*`, `RATE_LIMIT_*`, `ROLE_THROTTLE_*` | |
-| CAPTCHA | `CAPTCHA_SECRET_KEY`, `CAPTCHA_VERIFY_URL`, `CAPTCHA_TIMEOUT_MS`, `CAPTCHA_MAX_FAILURES`, `CAPTCHA_BLOCK_DURATION_SECONDS` | Required before auth nonce issuance |
-| Fraud detection | `FRAUD_*` | See [`docs/FRAUD_DETECTION.md`](docs/FRAUD_DETECTION.md) |
-| Referrals | `REFERRAL_*` | See [`docs/REFERRAL_PROGRAM.md`](docs/REFERRAL_PROGRAM.md) |
-| Webhooks | `WEBHOOK_SECRET`, `WEBHOOK_SECRET_*` | |
+| Group              | Variables                                                                                                                                                         | Notes                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Server             | `NODE_ENV`, `PORT`, `API_PREFIX`, `APP_BASE_URL`, `PUBLIC_API_URL`, `FRONTEND_URL`                                                                                | API is prefixed with `API_PREFIX` (default `api/v1`)       |
+| Logging / Sentry   | `LOG_LEVEL`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`                                                                                                 | Optional error monitoring                                  |
+| Auth               | `JWT_SECRET`, `JWT_EXPIRES_IN`, `JWT_REFRESH_SECRET`, `JWT_REFRESH_EXPIRES_IN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`                 | JWT secrets are required                                   |
+| Database           | `DATABASE_URL`, `PRISMA_CONNECTION_LIMIT`, `PRISMA_POOL_TIMEOUT_SECONDS`                                                                                          | PostgreSQL via Prisma                                      |
+| Stellar            | `STELLAR_NETWORK`, `STELLAR_RPC_URL`, `STELLAR_HORIZON_URL`, `SOROBANLARD_CONTRACT_ID`, `USDC_TOKEN_ADDRESS`, `ADMIN_STELLAR_ADDRESS`, `TREASURY_STELLAR_ADDRESS` | On-chain payment rail                                      |
+| File storage / CDN | `UPLOAD_DIR`, `MAX_FILE_SIZE_MB`, `CDN_*`                                                                                                                         |                                                            |
+| Email / SMS        | `SMTP_*`, `AFRICASTALKING_*`                                                                                                                                      |                                                            |
+| Redis              | `REDIS_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `QUEUE_*`, `CACHE_TTL_SECONDS`                                                                         |                                                            |
+| Rate limiting      | `THROTTLE_*`, `RATE_LIMIT_*`, `ROLE_THROTTLE_*`                                                                                                                   |                                                            |
+| CAPTCHA            | `CAPTCHA_SECRET_KEY`, `CAPTCHA_VERIFY_URL`, `CAPTCHA_TIMEOUT_MS`, `CAPTCHA_MAX_FAILURES`, `CAPTCHA_BLOCK_DURATION_SECONDS`                                        | Required before auth nonce issuance                        |
+| Fraud detection    | `FRAUD_*`                                                                                                                                                         | See [`docs/FRAUD_DETECTION.md`](docs/FRAUD_DETECTION.md)   |
+| Referrals          | `REFERRAL_*`                                                                                                                                                      | See [`docs/REFERRAL_PROGRAM.md`](docs/REFERRAL_PROGRAM.md) |
+| Webhooks           | `WEBHOOK_SECRET`, `WEBHOOK_SECRET_*`                                                                                                                              |                                                            |
 
 Never commit real secrets — `.env` is git-ignored; use `.env.example` as the
 template for any new variable you introduce.
@@ -280,7 +282,8 @@ services, so make sure the migrations apply cleanly before opening a PR.
 ## Lint & Format
 
 ```bash
-npm run lint   # ESLint (includes --fix)
+npm run lint   # ESLint check (does not modify files)
+npm run lint:fix # Apply ESLint fixes
 npm run format # Prettier
 ```
 

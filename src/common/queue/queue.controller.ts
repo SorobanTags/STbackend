@@ -1,7 +1,15 @@
-import { Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
+import { NOTIFICATION_EMAIL_QUEUE } from './queue.constants';
 import { QueueService } from './queue.service';
 
 @ApiTags('queue')
@@ -26,7 +34,7 @@ export class QueueController {
   @Get('dead-letter')
   @ApiOperation({ summary: 'List permanently-failed (dead-letter) jobs across queues' })
   getDeadLetterJobs() {
-    return this.queueService.getDeadLetterJobs();
+    return this.queueService.listDeadLetterJobs();
   }
 
   @Post('dead-letter/:queueName/:id/requeue')
@@ -35,6 +43,9 @@ export class QueueController {
     @Param('queueName') queueName: string,
     @Param('id') jobId: string,
   ) {
-    return this.queueService.requeueDeadLetterJob(queueName, jobId);
+    if (queueName !== NOTIFICATION_EMAIL_QUEUE) {
+      throw new NotFoundException('Queue not found');
+    }
+    return this.queueService.requeueDeadLetterJob(jobId);
   }
 }

@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Query, UseGuards, HttpCode, HttpStatus, UseInterceptors } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { LeaderboardService } from './leaderboard.service';
 import { LeaderboardQueryDto } from './dto/leaderboard-query.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';

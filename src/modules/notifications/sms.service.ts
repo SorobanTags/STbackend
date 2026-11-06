@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import africastalking = require('africastalking');
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { SmsStatus, SmsTemplateKey } from '@prisma/client';
 
@@ -55,11 +56,11 @@ export class SmsService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
   ) {
-    const africastalking = require('africastalking')({
+    const africastalkingClient = africastalking({
       apiKey: this.config.get('AFRICASTALKING_API_KEY'),
       username: this.config.get('AFRICASTALKING_USERNAME', 'sandbox'),
     });
-    this.gateway = africastalking.SMS;
+    this.gateway = africastalkingClient.SMS;
   }
 
   /** Validates and normalizes a phone number against country-specific formats, returning it in E.164 form. */

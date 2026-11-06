@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt, IsArray, Min, Max, ValidateNested } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsArray, Min, Max } from 'class-validator';
 
 export class QuestionDto {
   @IsString()

@@ -1,12 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { LiveSessionsService } from './live-sessions.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { ConflictException } from '@nestjs/common';
 import { LiveSessionStatus } from '@prisma/client';
 
 describe('LiveSessionsService', () => {
   let service: LiveSessionsService;
-  let prisma: any;
 
   const mockPrisma = {
     course: { findUnique: jest.fn() },
@@ -27,7 +26,6 @@ describe('LiveSessionsService', () => {
     }).compile();
 
     service = module.get<LiveSessionsService>(LiveSessionsService);
-    prisma = module.get(PrismaService);
     jest.clearAllMocks();
   });
 

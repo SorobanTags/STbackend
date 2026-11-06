@@ -2,14 +2,11 @@ import { plainToInstance } from 'class-transformer';
 import {
   IsDefined,
   IsEnum,
-  IsInt,
   IsOptional,
   IsString,
   IsUrl,
   IsEmail,
   Matches,
-  Max,
-  Min,
   MinLength,
   validateSync,
 } from 'class-validator';

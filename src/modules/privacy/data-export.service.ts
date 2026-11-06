@@ -95,8 +95,6 @@ const EXPORT_SECTIONS = {
     }),
 } as const;
 
-type ExportSectionKey = keyof typeof EXPORT_SECTIONS;
-
 @Injectable()
 export class DataExportService {
   private readonly logger = new Logger(DataExportService.name);

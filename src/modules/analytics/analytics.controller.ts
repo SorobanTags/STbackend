@@ -9,7 +9,6 @@ import {
   Query,
   Req,
   UseGuards,
-  StreamableFile,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,

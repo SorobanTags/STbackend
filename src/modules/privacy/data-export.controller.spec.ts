@@ -56,7 +56,7 @@ describe('DataExportController', () => {
     it('lists jobs for the authenticated user only', async () => {
       service.listMyExports.mockResolvedValue([{ id: 'job-1' }] as any);
 
-      const result = await controller.listMyExports('user-1', { page: 1, limit: 20 });
+      const result = await controller.listMyExports('user-1');
 
       expect(result).toEqual([{ id: 'job-1' }] as any);
       expect(service.listMyExports).toHaveBeenCalledWith('user-1');

@@ -1,7 +1,6 @@
 import {
   Injectable,
   Logger,
-  InternalServerErrorException,
   BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';

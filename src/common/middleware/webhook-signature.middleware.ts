@@ -33,8 +33,6 @@ import { Reflector } from '@nestjs/core';
 import { NextFunction, Request, Response } from 'express';
 import { createHmac, timingSafeEqual } from 'crypto';
 
-import { SKIP_WEBHOOK_SIGNATURE_KEY } from '../decorators/skip-webhook-signature.decorator';
-
 /** Header names checked in order of preference. */
 const SIGNATURE_HEADERS = [
   'x-webhook-signature',     // SorobanLard default / generic providers

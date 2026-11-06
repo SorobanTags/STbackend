@@ -32,7 +32,7 @@ describe('BundlesController', () => {
 
   it('findAll delegates query params to service', async () => {
     mockBundlesService.findAll.mockResolvedValue({ data: [] });
-    const result = await controller.findAll('GADDR', 2, 5);
+    const result = await controller.findAll({ instructorAddress: 'GADDR', page: 2, limit: 5 });
     expect(mockBundlesService.findAll).toHaveBeenCalledWith({ instructorAddress: 'GADDR', page: 2, limit: 5 });
     expect(result).toEqual({ data: [] });
   });

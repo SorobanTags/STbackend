@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
-import { QueueService } from './queue.service';
+import { NOTIFICATION_EMAIL_JOB_OPTIONS, QueueService } from './queue.service';
 
 describe('QueueService', () => {
   const queue = {
@@ -36,6 +36,7 @@ describe('QueueService', () => {
     expect(queue.add).toHaveBeenCalledWith(
       'send-notification-email',
       expect.objectContaining({ to: 'student@example.com' }),
+      NOTIFICATION_EMAIL_JOB_OPTIONS,
     );
   });
 

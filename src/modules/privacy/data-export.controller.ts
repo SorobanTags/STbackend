@@ -4,7 +4,6 @@ import {
   Post,
   Body,
   Param,
-  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -22,7 +21,6 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { DataExportService } from './data-export.service';
 import { RequestDataExportDto } from './dto/request-data-export.dto';
-import { QueryExportHistoryDto } from './dto/query-export-history.dto';
 
 @ApiTags('privacy')
 @ApiBearerAuth()
@@ -60,10 +58,7 @@ export class DataExportController {
    */
   @Get()
   @ApiOperation({ summary: 'List your data export requests' })
-  listMyExports(
-    @CurrentUser('id') userId: string,
-    @Query() query: QueryExportHistoryDto,
-  ) {
+  listMyExports(@CurrentUser('id') userId: string) {
     return this.dataExportService.listMyExports(userId);
   }
 

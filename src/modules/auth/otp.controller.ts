@@ -9,6 +9,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiTags('auth')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+@Controller('otp')
 export class OtpController {
   constructor(private readonly otpService: OtpService) {}
 

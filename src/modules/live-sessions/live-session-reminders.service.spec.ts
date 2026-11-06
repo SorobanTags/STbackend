@@ -6,8 +6,6 @@ import { LiveSessionStatus, NotificationType } from '@prisma/client';
 
 describe('LiveSessionRemindersService', () => {
   let service: LiveSessionRemindersService;
-  let prisma: any;
-  let notifications: any;
 
   const mockPrisma = {
     liveSession: {
@@ -32,8 +30,6 @@ describe('LiveSessionRemindersService', () => {
     service = module.get<LiveSessionRemindersService>(
       LiveSessionRemindersService,
     );
-    prisma = module.get(PrismaService);
-    notifications = module.get(NotificationsService);
     jest.clearAllMocks();
   });
 

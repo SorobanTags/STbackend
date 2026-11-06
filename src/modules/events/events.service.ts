@@ -272,7 +272,7 @@ export class EventsService implements OnModuleInit {
 
   private async handleStudentEnrolled(payload: any) {
     // Payload: (course_id, student_address, amount_paid)
-    const [courseId, studentAddress, amountPaid] = Array.isArray(payload)
+    const [courseId, studentAddress] = Array.isArray(payload)
       ? payload
       : [payload, null, null];
 

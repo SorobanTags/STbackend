@@ -29,7 +29,6 @@ export class LiveSessionsService {
       throw new NotFoundException('Course not found');
     }
 
-    const instructorAddr = user.stellarAddress || user.address || course.instructorAddress;
     if (
       course.instructor.id !== user.id &&
       course.instructorAddress !== user.stellarAddress

@@ -716,6 +716,7 @@ model Certificate {
   txHash          String?  // on-chain certificate issuance tx
   pdfUrl          String?  // generated PDF file reference/URL
   isRevoked       Boolean   @default(false)
+  isFraudHeld     Boolean   @default(false)
   revokedById     String?
   revokedAt       DateTime?
   revokeReason    String?
@@ -977,6 +978,7 @@ model Payout {
   periodEnd        DateTime?
   notes            String?
   processedAt      DateTime?
+  idempotencyKey   String?   @unique
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 

@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { LeaderboardService } from './leaderboard.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { CacheService } from '../../common/cache/cache.service';
 import { LeaderboardScope } from './dto/leaderboard-query.dto';
 import { BadRequestException } from '@nestjs/common';
 
@@ -41,7 +42,9 @@ let snapshotStore: Array<{
   scope: string;
   courseId: string | null;
   userId: string;
+  points: number;
   rank: number;
+  previousRank: number | null;
   computedAt: Date;
 }> = [];
 
@@ -56,9 +59,23 @@ const mockPrisma = {
     findMany: jest.fn(async (args?: any) => {
       const scope = args?.where?.scope;
       const courseId = args?.where?.courseId ?? null;
-      return snapshotStore.filter(
+      const snapshots = snapshotStore.filter(
         (s) => s.scope === scope && (s.courseId ?? null) === courseId,
       );
+      if (args?.select) {
+        return snapshots.map(({ userId, rank }) => ({ userId, rank }));
+      }
+      return snapshots.map((snapshot) => {
+        const student = mockStudents.find(({ id }) => id === snapshot.userId);
+        return {
+          ...snapshot,
+          user: {
+            name: student?.name,
+            avatarUrl: student?.avatarUrl,
+            stellarAddress: student?.stellarAddress,
+          },
+        };
+      });
     }),
     deleteMany: jest.fn(async (args?: any) => {
       const scope = args?.where?.scope;
@@ -74,6 +91,13 @@ const mockPrisma = {
       }
       return { count: args?.data?.length ?? 0 };
     }),
+    count: jest.fn(async (args?: any) => {
+      const scope = args?.where?.scope;
+      const courseId = args?.where?.courseId ?? null;
+      return snapshotStore.filter(
+        (snapshot) => snapshot.scope === scope && (snapshot.courseId ?? null) === courseId,
+      ).length;
+    }),
   },
   $transaction: jest.fn(async (callback: any) => {
     if (typeof callback === 'function') {
@@ -81,6 +105,13 @@ const mockPrisma = {
     }
     return Promise.all(callback);
   }),
+};
+
+const mockCache = {
+  buildKey: jest.fn().mockReturnValue('leaderboard'),
+  get: jest.fn().mockResolvedValue(null),
+  set: jest.fn().mockResolvedValue(undefined),
+  invalidateNamespace: jest.fn().mockResolvedValue(undefined),
 };
 
 describe('LeaderboardService', () => {
@@ -92,6 +123,7 @@ describe('LeaderboardService', () => {
       providers: [
         LeaderboardService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: CacheService, useValue: mockCache },
       ],
     }).compile();
 
@@ -106,8 +138,27 @@ describe('LeaderboardService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('returns top-N leaderboard entries for global scope with calculated points and rank', async () => {
-      mockPrisma.user.findMany.mockResolvedValue(mockStudents);
+    it('returns top-N leaderboard entries from the persisted global snapshot', async () => {
+      snapshotStore = [
+        {
+          scope: LeaderboardScope.GLOBAL,
+          courseId: null,
+          userId: 'student-1',
+          points: 255,
+          rank: 1,
+          previousRank: null,
+          computedAt: new Date(),
+        },
+        {
+          scope: LeaderboardScope.GLOBAL,
+          courseId: null,
+          userId: 'student-2',
+          points: 10,
+          rank: 2,
+          previousRank: null,
+          computedAt: new Date(),
+        },
+      ];
 
       const result = await service.getLeaderboard({
         scope: LeaderboardScope.GLOBAL,
@@ -116,11 +167,9 @@ describe('LeaderboardService', () => {
 
       expect(result.total).toBe(2);
       expect(result.data[0].userId).toBe('student-1');
-      // Points calculation for student-1: (2 lessons * 10) + 100 bonus + (1 assignment * 50) + 85 exam = 255
       expect(result.data[0].points).toBe(255);
       expect(result.data[0].currentRank).toBe(1);
 
-      // Points calculation for student-2: 1 lesson * 10 = 10
       expect(result.data[1].userId).toBe('student-2');
       expect(result.data[1].points).toBe(10);
       expect(result.data[1].currentRank).toBe(2);
@@ -134,6 +183,7 @@ describe('LeaderboardService', () => {
       await service.recalculateRankings();
       expect(mockPrisma.$transaction).toHaveBeenCalled();
       expect(snapshotStore.length).toBe(2);
+      await service.recalculateRankings();
 
       // Now query leaderboard
       const result = await service.getLeaderboard({
@@ -164,12 +214,14 @@ describe('LeaderboardService', () => {
         mockStudents[0], // student-1 has 255 points
       ];
       mockPrisma.user.findMany.mockResolvedValue(updatedStudents);
+      await service.recalculateRankings();
 
       // Simulate application restart: instantiate a fresh second service instance
       const freshModule: TestingModule = await Test.createTestingModule({
         providers: [
           LeaderboardService,
           { provide: PrismaService, useValue: mockPrisma },
+          { provide: CacheService, useValue: mockCache },
         ],
       }).compile();
       const freshService = freshModule.get<LeaderboardService>(LeaderboardService);

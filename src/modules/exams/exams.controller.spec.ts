@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ExamsController } from './exams.controller';
 import { ExamsService } from './exams.service';
-import { RolesGuard } from '../../common/guards/roles.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
@@ -9,7 +8,6 @@ import { ForbiddenException } from '@nestjs/common';
 
 describe('ExamsController', () => {
   let controller: ExamsController;
-  let service: ExamsService;
 
   const mockExamsService = {
     createOrUpdateExam: jest.fn(),
@@ -33,7 +31,6 @@ describe('ExamsController', () => {
       .compile();
 
     controller = module.get<ExamsController>(ExamsController);
-    service = module.get<ExamsService>(ExamsService);
     jest.clearAllMocks();
   });
 

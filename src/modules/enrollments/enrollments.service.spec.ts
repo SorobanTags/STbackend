@@ -13,7 +13,6 @@ import { FraudFlagStatus, FraudRiskLevel } from '@prisma/client';
 describe('EnrollmentsService - Fraud HOLD handling', () => {
   let service: EnrollmentsService;
   let fraudDetection: FraudDetectionService;
-  let prisma: PrismaService;
 
   const mockPrisma = {
     enrollment: {
@@ -73,7 +72,6 @@ describe('EnrollmentsService - Fraud HOLD handling', () => {
 
     service = module.get<EnrollmentsService>(EnrollmentsService);
     fraudDetection = module.get<FraudDetectionService>(FraudDetectionService);
-    prisma = module.get<PrismaService>(PrismaService);
     jest.clearAllMocks();
   });
 

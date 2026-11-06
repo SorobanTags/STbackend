@@ -112,6 +112,7 @@ export class CoursesService {
 
     // Index the approved course into the search engine
     await this.indexCourseForSearch(updated.id);
+    this.logger.log(`Course ${courseId} approved by admin ${adminId}`);
 
     // Notify instructor
     const instructor = await this.prisma.user.findUnique({
@@ -286,7 +287,7 @@ export class CoursesService {
   }
 
   async updateStats(courseId: string, delta: { enrollments?: number; revenue?: number }) {
-    const course = await this.findOne(courseId);
+    await this.findOne(courseId);
     return this.prisma.course.update({
       where: { id: courseId },
       data: {

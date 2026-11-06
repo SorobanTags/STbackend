@@ -98,7 +98,7 @@ describe('AnalyticsService', () => {
         { eventType: 'click', _count: { _all: 4 } },
       ]);
 
-      const result = await service.getVolumeByEventType();
+      const result = await service.getVolumeByEventType('2026-01-01', '2026-01-31');
       expect(result.total).toBe(14);
       expect(result.byEventType).toEqual([
         { eventType: 'page_view', count: 10 },
@@ -116,6 +116,8 @@ describe('AnalyticsService', () => {
 
       const result = await service.queryRawEvents({
         eventType: 'page_view',
+        from: '2026-01-01',
+        to: '2026-01-31',
         page: 1,
         limit: 10,
       });

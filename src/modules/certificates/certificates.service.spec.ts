@@ -6,6 +6,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ExamsService } from '../exams/exams.service';
 import { CertificatePdfService } from './certificate-pdf.service';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bullmq';
+import { CERTIFICATE_PDF_QUEUE } from '../../common/queue/queue.constants';
 
 const mockPrisma = {
   enrollment: {
@@ -39,6 +41,10 @@ const mockPdfService = {
   renderForCategory: jest.fn().mockResolvedValue(Buffer.from('pdf')),
 };
 
+const mockPdfQueue = {
+  add: jest.fn().mockResolvedValue({}),
+};
+
 const MOCK_ENROLLMENT = {
   id:             'enroll-1',
   studentId:      'student-1',
@@ -62,6 +68,7 @@ describe('CertificatesService', () => {
         { provide: NotificationsService, useValue: mockNotifications },
         { provide: ExamsService,         useValue: mockExams },
         { provide: CertificatePdfService, useValue: mockPdfService },
+        { provide: getQueueToken(CERTIFICATE_PDF_QUEUE), useValue: mockPdfQueue },
       ],
     }).compile();
 

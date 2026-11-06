@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { SubmitQuizAttemptDto, SingleAnswerDto } from './dto/submit-quiz-attempt.dto';
+import { SubmitQuizAttemptDto } from './dto/submit-quiz-attempt.dto';
 import { QuestionType } from '@prisma/client';
 
 export interface AnswerValidationResult {

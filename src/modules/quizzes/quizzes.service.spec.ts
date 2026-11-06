@@ -1,4 +1,3 @@
-import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { QuizzesService } from './quizzes.service';
 import { PrismaService } from '../../common/prisma/prisma.service';

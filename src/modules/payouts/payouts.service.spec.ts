@@ -7,12 +7,12 @@ import { PayoutStatus, UserRole } from '@prisma/client';
 
 describe('PayoutsService', () => {
   let service: PayoutsService;
-  let prisma: any;
 
   const mockPrisma = {
     user: { findUnique: jest.fn() },
     payout: {
       findMany: jest.fn(),
+      findFirst: jest.fn(),
       count: jest.fn(),
       findUnique: jest.fn(),
       create: jest.fn(),
@@ -35,7 +35,6 @@ describe('PayoutsService', () => {
     }).compile();
 
     service = module.get<PayoutsService>(PayoutsService);
-    prisma = module.get(PrismaService);
     jest.clearAllMocks();
   });
 

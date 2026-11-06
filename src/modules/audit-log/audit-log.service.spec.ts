@@ -7,7 +7,6 @@ import { AuditAction, AuditTargetType } from '@prisma/client';
 describe('AuditLogService', () => {
   let service: AuditLogService;
   let prisma: PrismaService;
-  let config: ConfigService;
 
   const mockPrisma = {
     adminAuditLog: {
@@ -33,7 +32,6 @@ describe('AuditLogService', () => {
 
     service = module.get<AuditLogService>(AuditLogService);
     prisma = module.get<PrismaService>(PrismaService);
-    config = module.get<ConfigService>(ConfigService);
   });
 
   afterEach(() => {

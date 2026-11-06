@@ -36,7 +36,7 @@ describe('NotificationsController', () => {
   it('findAll delegates to findForUser with query params', async () => {
     mockNotificationsService.findForUser.mockResolvedValue({ data: [] });
 
-    const res = await controller.findAll('user-1', true, 2, 10);
+    const res = await controller.findAll('user-1', { unreadOnly: true, page: 2, limit: 10 });
 
     expect(mockNotificationsService.findForUser).toHaveBeenCalledWith('user-1', true, 2, 10);
     expect(res).toEqual({ data: [] });

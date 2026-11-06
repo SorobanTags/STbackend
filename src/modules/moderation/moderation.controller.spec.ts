@@ -25,7 +25,7 @@ describe('ModerationController', () => {
   });
 
   it('getDashboardListing applies default pagination', () => {
-    controller.getDashboardListing();
+    controller.getDashboardListing({});
     expect(service.getDashboardListing).toHaveBeenCalledWith({
       status: undefined,
       targetType: undefined,
@@ -36,7 +36,13 @@ describe('ModerationController', () => {
   });
 
   it('getDashboardListing coerces page/limit and passes filters', () => {
-    controller.getDashboardListing('PENDING' as any, 'COURSE' as any, 'SPAM' as any, '3' as any, '25' as any);
+    controller.getDashboardListing({
+      status: 'PENDING' as any,
+      targetType: 'COURSE' as any,
+      category: 'SPAM' as any,
+      page: 3,
+      limit: 25,
+    });
     expect(service.getDashboardListing).toHaveBeenCalledWith({
       status: 'PENDING',
       targetType: 'COURSE',

@@ -130,7 +130,9 @@ export class QuizzesService {
    */
   private sanitizeForRole(question: any, userRole?: string): any {
     if (userRole === UserRole.STUDENT) {
-      const { correctAnswer, explanation, ...safe } = question;
+      const safe = { ...question };
+      delete safe.correctAnswer;
+      delete safe.explanation;
       return safe;
     }
     return question;

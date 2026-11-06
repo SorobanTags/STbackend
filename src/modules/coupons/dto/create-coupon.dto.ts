@@ -32,10 +32,13 @@ export class CreateCouponDto {
   })
   @IsNumber()
   @IsPositive()
-  @IsUsdcAmount({
+  @IsUsdcAmount<CreateCouponDto>({
     condition: (coupon) => coupon.discountType === DiscountType.FIXED,
   })
-  @IsPercentageAtMost(100, (coupon) => coupon.discountType === DiscountType.PERCENTAGE)
+  @IsPercentageAtMost<CreateCouponDto>(
+    100,
+    (coupon) => coupon.discountType === DiscountType.PERCENTAGE,
+  )
   discountValue: number;
 
   @ApiProperty({

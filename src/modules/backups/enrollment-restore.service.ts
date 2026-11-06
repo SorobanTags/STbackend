@@ -4,11 +4,17 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { EnrollmentsService } from '../enrollments/enrollments.service';
 import {
   EnrollmentConflictStrategy,
-  EnrollmentRestoreFailure,
   RestoreEnrollmentRecordDto,
   RestoreEnrollmentsDto,
   RestoreLessonProgressDto,
 } from './dto/restore-enrollments.dto';
+
+interface EnrollmentRestoreFailure {
+  id?: string;
+  studentId: string;
+  courseId: string;
+  reason: string;
+}
 
 export interface EnrollmentRestoreValidationIssue {
   studentId: string;
@@ -158,7 +164,7 @@ export class EnrollmentRestoreService {
           issues.push(...progressResult.issues);
         }
 
-        succeeded.push(record.id);
+        succeeded.push(record.id ?? `${record.studentId}:${record.courseId}`);
       } catch (error) {
         // Best-effort: record the failure and continue with the next record.
         counts.enrollmentsFailed += 1;

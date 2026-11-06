@@ -6,7 +6,6 @@ import { UserRole } from '@prisma/client';
 
 describe('ExamsService', () => {
   let service: ExamsService;
-  let prisma: any;
 
   const mockPrisma = {
     course: { findUnique: jest.fn() },
@@ -33,7 +32,6 @@ describe('ExamsService', () => {
     }).compile();
 
     service = module.get<ExamsService>(ExamsService);
-    prisma = module.get(PrismaService);
     jest.clearAllMocks();
   });
 

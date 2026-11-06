@@ -4,11 +4,11 @@
 
 This is **Repo 2 of 3** in the SorobanLard project:
 
-| Repo | Description |
-|------|-------------|
-| `sorobanlard-contract` | Soroban smart contract (Rust) — payments + certificates |
-| `sorobanlard-backend` ← you are here | NestJS REST API — content, progress, users |
-| `sorobanlard-frontend` | Next.js — student and instructor portal |
+| Repo                                 | Description                                             |
+| ------------------------------------ | ------------------------------------------------------- |
+| `sorobanlard-contract`               | Soroban smart contract (Rust) — payments + certificates |
+| `sorobanlard-backend` ← you are here | NestJS REST API — content, progress, users              |
+| `sorobanlard-frontend`               | Next.js — student and instructor portal                 |
 
 ---
 
@@ -29,16 +29,16 @@ The backend is the content and user management layer of SorobanLard. It handles 
 
 ## What Lives Where
 
-| Responsibility | Backend | Contract |
-|---|---|---|
-| Course content (videos, text) | ✓ | — |
-| Student progress tracking | ✓ | — |
-| User profiles | ✓ | — |
-| Assignment submission + review | ✓ | — |
-| Course payment processing | — | ✓ |
-| Enrollment record (trustless) | — | ✓ |
-| Certificate of completion | — | ✓ |
-| Certificate verification (public) | ✓ (cross-checks) | ✓ |
+| Responsibility                    | Backend          | Contract |
+| --------------------------------- | ---------------- | -------- |
+| Course content (videos, text)     | ✓                | —        |
+| Student progress tracking         | ✓                | —        |
+| User profiles                     | ✓                | —        |
+| Assignment submission + review    | ✓                | —        |
+| Course payment processing         | —                | ✓        |
+| Enrollment record (trustless)     | —                | ✓        |
+| Certificate of completion         | —                | ✓        |
+| Certificate verification (public) | ✓ (cross-checks) | ✓        |
 
 ---
 
@@ -69,19 +69,19 @@ The backend is the content and user management layer of SorobanLard. It handles 
 
 ## Module Overview
 
-| Module | Responsibility |
-|--------|---------------|
-| `AuthModule` | Sign-In With Stellar (nonce + JWT). Supports STUDENT and INSTRUCTOR roles at registration. |
-| `UsersModule` | Profile management, instructor analytics dashboard |
-| `CoursesModule` | Full CRUD, DRAFT → PENDING → ACTIVE approval workflow, category browsing |
-| `LessonsModule` | Lesson and module creation, video progress tracking, completion detection |
-| `EnrollmentsModule` | Register on-chain enrollments in DB, query per-student progress |
-| `AssignmentsModule` | Practical assignment creation, student submission, instructor review |
-| `CertificatesModule` | Trigger certificate issuance, on-chain verification cross-check, revocation |
-| `EventsModule` | Stellar RPC event poller (5s cron) — syncs on-chain events to DB |
-| `NotificationsModule` | In-app + email (Nodemailer) notifications |
-| `UploadsModule` | Multer file uploads — video (500MB), thumbnail (5MB), resource (50MB), assignment (100MB) |
-| `HealthModule` | `/health` DB ping endpoint |
+| Module                | Responsibility                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------ |
+| `AuthModule`          | Sign-In With Stellar (nonce + JWT). Supports STUDENT and INSTRUCTOR roles at registration. |
+| `UsersModule`         | Profile management, instructor analytics dashboard                                         |
+| `CoursesModule`       | Full CRUD, DRAFT → PENDING → ACTIVE approval workflow, category browsing                   |
+| `LessonsModule`       | Lesson and module creation, video progress tracking, completion detection                  |
+| `EnrollmentsModule`   | Register on-chain enrollments in DB, query per-student progress                            |
+| `AssignmentsModule`   | Practical assignment creation, student submission, instructor review                       |
+| `CertificatesModule`  | Trigger certificate issuance, on-chain verification cross-check, revocation                |
+| `EventsModule`        | Stellar RPC event poller (5s cron) — syncs on-chain events to DB                           |
+| `NotificationsModule` | In-app + email (Nodemailer) notifications                                                  |
+| `UploadsModule`       | Multer file uploads — video (500MB), thumbnail (5MB), resource (50MB), assignment (100MB)  |
+| `HealthModule`        | `/health` DB ping endpoint                                                                 |
 
 ---
 
@@ -92,86 +92,95 @@ All endpoints prefixed with `/api/v1`. Protected routes require `Authorization: 
 See [docs/API_VERSIONING.md](docs/API_VERSIONING.md) for the versioning and deprecation policy, and [docs/WEBHOOKS.md](docs/WEBHOOKS.md) for inbound webhook contracts.
 
 ### Auth
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/auth/nonce?address=G...` | Get challenge nonce |
-| `POST` | `/auth/login` | Submit signed nonce, receive JWT. Pass `role: INSTRUCTOR` to register as instructor. |
+
+| Method | Path                       | Description                                                                          |
+| ------ | -------------------------- | ------------------------------------------------------------------------------------ |
+| `GET`  | `/auth/nonce?address=G...` | Get challenge nonce                                                                  |
+| `POST` | `/auth/login`              | Submit signed nonce, receive JWT. Pass `role: INSTRUCTOR` to register as instructor. |
 
 ### Users
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/users/me` | ✓ | Get authenticated user profile + enrollments + certificates |
-| `PATCH` | `/users/me` | ✓ | Update name, email, bio, avatar |
-| `GET` | `/users/me/instructor-stats` | ✓ INSTRUCTOR | Revenue + enrollment analytics |
-| `GET` | `/users/:address/public` | — | Public instructor profile |
+
+| Method  | Path                         | Auth         | Description                                                 |
+| ------- | ---------------------------- | ------------ | ----------------------------------------------------------- |
+| `GET`   | `/users/me`                  | ✓            | Get authenticated user profile + enrollments + certificates |
+| `PATCH` | `/users/me`                  | ✓            | Update name, email, bio, avatar                             |
+| `GET`   | `/users/me/instructor-stats` | ✓ INSTRUCTOR | Revenue + enrollment analytics                              |
+| `GET`   | `/users/:address/public`     | —            | Public instructor profile                                   |
 
 ### Courses
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/courses` | — | Browse active courses (filter: category, level, search) |
-| `GET` | `/courses/categories` | — | List all categories with counts |
-| `GET` | `/courses/:id` | — | Full course detail with modules and lessons |
-| `POST` | `/courses` | ✓ INSTRUCTOR | Create course draft |
-| `PATCH` | `/courses/:id` | ✓ INSTRUCTOR | Update course details |
-| `POST` | `/courses/:id/submit` | ✓ INSTRUCTOR | Submit for admin review |
-| `GET` | `/courses/admin/pending` | ✓ ADMIN | List courses awaiting approval |
-| `POST` | `/courses/:id/approve` | ✓ ADMIN | Approve a pending course |
-| `POST` | `/courses/:id/reject` | ✓ ADMIN | Reject with feedback |
+
+| Method  | Path                     | Auth         | Description                                             |
+| ------- | ------------------------ | ------------ | ------------------------------------------------------- |
+| `GET`   | `/courses`               | —            | Browse active courses (filter: category, level, search) |
+| `GET`   | `/courses/categories`    | —            | List all categories with counts                         |
+| `GET`   | `/courses/:id`           | —            | Full course detail with modules and lessons             |
+| `POST`  | `/courses`               | ✓ INSTRUCTOR | Create course draft                                     |
+| `PATCH` | `/courses/:id`           | ✓ INSTRUCTOR | Update course details                                   |
+| `POST`  | `/courses/:id/submit`    | ✓ INSTRUCTOR | Submit for admin review                                 |
+| `GET`   | `/courses/admin/pending` | ✓ ADMIN      | List courses awaiting approval                          |
+| `POST`  | `/courses/:id/approve`   | ✓ ADMIN      | Approve a pending course                                |
+| `POST`  | `/courses/:id/reject`    | ✓ ADMIN      | Reject with feedback                                    |
 
 ### Lessons
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/lessons/:id` | ✓ | Get lesson content |
-| `POST` | `/lessons/modules` | ✓ INSTRUCTOR | Create a course module |
-| `POST` | `/lessons` | ✓ INSTRUCTOR | Add a lesson to a module |
-| `POST` | `/lessons/:id/complete` | ✓ | Mark lesson complete (recalculates progress) |
-| `PATCH` | `/lessons/:id/progress` | ✓ | Update video watch position |
+
+| Method  | Path                    | Auth         | Description                                  |
+| ------- | ----------------------- | ------------ | -------------------------------------------- |
+| `GET`   | `/lessons/:id`          | ✓            | Get lesson content                           |
+| `POST`  | `/lessons/modules`      | ✓ INSTRUCTOR | Create a course module                       |
+| `POST`  | `/lessons`              | ✓ INSTRUCTOR | Add a lesson to a module                     |
+| `POST`  | `/lessons/:id/complete` | ✓            | Mark lesson complete (recalculates progress) |
+| `PATCH` | `/lessons/:id/progress` | ✓            | Update video watch position                  |
 
 ### Enrollments
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/enrollments` | ✓ | Register on-chain enrollment after Freighter tx |
-| `GET` | `/enrollments/my` | ✓ | All enrollments for current student |
-| `GET` | `/enrollments/:courseId` | ✓ | Single enrollment with full lesson progress |
-| `GET` | `/enrollments/:courseId/check` | ✓ | Is user enrolled in this course? |
+
+| Method | Path                           | Auth | Description                                     |
+| ------ | ------------------------------ | ---- | ----------------------------------------------- |
+| `POST` | `/enrollments`                 | ✓    | Register on-chain enrollment after Freighter tx |
+| `GET`  | `/enrollments/my`              | ✓    | All enrollments for current student             |
+| `GET`  | `/enrollments/:courseId`       | ✓    | Single enrollment with full lesson progress     |
+| `GET`  | `/enrollments/:courseId/check` | ✓    | Is user enrolled in this course?                |
 
 ### Assignments
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/assignments/lesson/:lessonId` | ✓ | Get assignment for a lesson |
-| `POST` | `/assignments` | ✓ INSTRUCTOR | Create assignment for a lesson |
-| `POST` | `/assignments/:id/submit` | ✓ | Student submits practical work |
-| `POST` | `/assignments/submissions/:id/review` | ✓ INSTRUCTOR | Approve or reject submission |
-| `GET` | `/assignments/my/submissions` | ✓ | Student's all submissions |
-| `GET` | `/assignments/instructor/pending` | ✓ INSTRUCTOR | All pending reviews |
+
+| Method | Path                                  | Auth         | Description                    |
+| ------ | ------------------------------------- | ------------ | ------------------------------ |
+| `GET`  | `/assignments/lesson/:lessonId`       | ✓            | Get assignment for a lesson    |
+| `POST` | `/assignments`                        | ✓ INSTRUCTOR | Create assignment for a lesson |
+| `POST` | `/assignments/:id/submit`             | ✓            | Student submits practical work |
+| `POST` | `/assignments/submissions/:id/review` | ✓ INSTRUCTOR | Approve or reject submission   |
+| `GET`  | `/assignments/my/submissions`         | ✓            | Student's all submissions      |
+| `GET`  | `/assignments/instructor/pending`     | ✓ INSTRUCTOR | All pending reviews            |
 
 ### Certificates
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/certificates/verify/:id` | — | **Public** — verify certificate by ID |
-| `GET` | `/certificates/:id` | — | **Public** — get certificate details |
-| `GET` | `/certificates/my/all` | ✓ | Student's certificates |
-| `POST` | `/certificates` | ✓ ADMIN | Issue certificate for completed student |
-| `PATCH` | `/certificates/:id/tx-hash` | ✓ ADMIN | Update on-chain tx hash |
-| `POST` | `/certificates/:id/revoke` | ✓ ADMIN | Revoke a certificate |
+
+| Method  | Path                        | Auth    | Description                             |
+| ------- | --------------------------- | ------- | --------------------------------------- |
+| `GET`   | `/certificates/verify/:id`  | —       | **Public** — verify certificate by ID   |
+| `GET`   | `/certificates/:id`         | —       | **Public** — get certificate details    |
+| `GET`   | `/certificates/my/all`      | ✓       | Student's certificates                  |
+| `POST`  | `/certificates`             | ✓ ADMIN | Issue certificate for completed student |
+| `PATCH` | `/certificates/:id/tx-hash` | ✓ ADMIN | Update on-chain tx hash                 |
+| `POST`  | `/certificates/:id/revoke`  | ✓ ADMIN | Revoke a certificate                    |
 
 ### Uploads
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/uploads/thumbnail` | ✓ | Upload course thumbnail (max 5MB, image) |
-| `POST` | `/uploads/video` | ✓ | Upload lesson video (max 500MB) |
-| `POST` | `/uploads/resource` | ✓ | Upload downloadable resource (max 50MB) |
-| `POST` | `/uploads/assignment` | ✓ | Upload assignment submission (max 100MB) |
+
+| Method | Path                  | Auth | Description                              |
+| ------ | --------------------- | ---- | ---------------------------------------- |
+| `POST` | `/uploads/thumbnail`  | ✓    | Upload course thumbnail (max 5MB, image) |
+| `POST` | `/uploads/video`      | ✓    | Upload lesson video (max 500MB)          |
+| `POST` | `/uploads/resource`   | ✓    | Upload downloadable resource (max 50MB)  |
+| `POST` | `/uploads/assignment` | ✓    | Upload assignment submission (max 100MB) |
 
 ### Events, Notifications — standard across all SorobanLard repos
 
 ### Health
+
 Readiness probe for container orchestrators (no auth; exempt from IP rate limiting via `rate-limit.middleware.ts`).
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Aggregate readiness check: **Postgres** (Prisma ping), **Redis** (ping), **Meilisearch** (health) + informational event-poller checkpoint |
-| `GET` | `/health/checkpoint` | Authoritative Stellar event-poller ledger checkpoint status (crash recovery) |
+| Method | Path                 | Description                                                                                                                               |
+| ------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/health`            | Aggregate readiness check: **Postgres** (Prisma ping), **Redis** (ping), **Meilisearch** (health) + informational event-poller checkpoint |
+| `GET`  | `/health/checkpoint` | Authoritative Stellar event-poller ledger checkpoint status (crash recovery)                                                              |
 
 Response shape for `GET /health` — `200` when every critical dependency is up, `503` (via `ServiceUnavailableException`) as soon as one is down, so orchestrators stop routing traffic to the unhealthy instance:
 
@@ -179,9 +188,9 @@ Response shape for `GET /health` — `200` when every critical dependency is up,
 {
   "status": "ok",
   "info": {
-    "database":   { "status": "up" },
-    "redis":      { "status": "up", "roundTripMs": 3 },
-    "meilisearch":{ "status": "up", "roundTripMs": 7 },
+    "database": { "status": "up" },
+    "redis": { "status": "up", "roundTripMs": 3 },
+    "meilisearch": { "status": "up", "roundTripMs": 7 },
     "event_poller_checkpoint": {
       "status": "up",
       "checkpointHealthy": true,
@@ -195,9 +204,9 @@ Response shape for `GET /health` — `200` when every critical dependency is up,
   },
   "error": {},
   "details": {
-    "database":   { "status": "up" },
-    "redis":      { "status": "up", "roundTripMs": 3 },
-    "meilisearch":{ "status": "up", "roundTripMs": 7 },
+    "database": { "status": "up" },
+    "redis": { "status": "up", "roundTripMs": 3 },
+    "meilisearch": { "status": "up", "roundTripMs": 7 },
     "event_poller_checkpoint": { "status": "up", "checkpointHealthy": true }
   }
 }
@@ -321,9 +330,15 @@ Swagger: `http://localhost:3000/docs`
 ## Running Tests
 
 ```bash
+npm run lint
+npm run build
 npm run test
 npm run test:cov
 ```
+
+CI runs the same lint, build, and test checks on Node.js 20, generates the
+Prisma client, applies migrations to a disposable PostgreSQL service, and
+checks the migration history against `prisma/schema.prisma`.
 
 ---
 
@@ -345,9 +360,10 @@ npm run test:cov
 
 ## Executive Summary & Root Cause Analysis
 
-In TypeScript 5.0+, the compiler strictly enforces compatibilities between module system targets (`compilerOptions.module`) and module resolution strategies (`compilerOptions.moduleResolution`). 
+In TypeScript 5.0+, the compiler strictly enforces compatibilities between module system targets (`compilerOptions.module`) and module resolution strategies (`compilerOptions.moduleResolution`).
 
 When `tsconfig.json` specifies:
+
 ```json
 {
   "compilerOptions": {
@@ -897,3 +913,4 @@ Verification Matrix & Final Checklist
 ## License
 
 MIT
+```

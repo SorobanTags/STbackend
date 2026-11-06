@@ -59,8 +59,9 @@ describe('DbBackupService', () => {
     let listPage = 0;
     send.mockImplementation(async (command: unknown) => {
       if (command instanceof PutObjectCommand) {
-        for await (const _chunk of command.input.Body as Readable) {
+        for await (const chunk of command.input.Body as Readable) {
           // Consume the stream before the temporary file is removed.
+          expect(chunk).toBeDefined();
         }
         return {};
       }

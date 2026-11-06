@@ -8,7 +8,6 @@ import {
 import { Prisma } from '@prisma/client';
 import PDFDocument = require('pdfkit');
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { validateFileMimeType } from './mime-validator';
 import {
   CreateCertificateTemplateDto,
   PreviewCertificateTemplateDto,

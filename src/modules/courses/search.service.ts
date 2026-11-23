@@ -128,9 +128,16 @@ export class SearchService {
     const existing = suggestions.get(key);
     if (!existing) {
       suggestions.set(key, suggestion);
-    } else if (suggestion.rank > existing.rank) {
-      // Keep the existing entry's text to preserve stable, human-readable casing (#38)
-      suggestions.set(key, { ...suggestion, text: existing.text });
+    } else {
+      // Choose canonical text deterministically (rank-independent) by picking the
+      // lexicographically earlier text, so the casing does not vary with input order (#38).
+      const canonicalText = suggestion.text < existing.text ? suggestion.text : existing.text;
+      if (suggestion.rank > existing.rank) {
+        suggestions.set(key, { ...suggestion, text: canonicalText });
+      } else if (canonicalText !== existing.text) {
+        // Rank does not change but we still adopt the canonical casing
+        suggestions.set(key, { ...existing, text: canonicalText });
+      }
     }
   }
 

@@ -45,7 +45,7 @@ export class SearchService {
         },
         take: limit * 2,
       }),
-      (this.prisma as any).courseSearchTerm.findMany({
+      this.prisma.courseSearchTerm.findMany({
         where: { term: { contains: normalizedQuery, mode: 'insensitive' } },
         orderBy: [{ searchCount: 'desc' }, { updatedAt: 'desc' }],
         take: limit,
@@ -98,7 +98,7 @@ export class SearchService {
   }
 
   private async trackSearchTerm(term: string) {
-    await (this.prisma as any).courseSearchTerm.upsert({
+    await this.prisma.courseSearchTerm.upsert({
       where: { term },
       create: { term, searchCount: 1 },
       update: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },

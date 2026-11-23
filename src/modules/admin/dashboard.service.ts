@@ -4,6 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { DashboardQueryDto } from './dto/dashboard-query.dto';
 import { CourseStatus, EnrollmentStatus, UserRole } from '@prisma/client';
+import { parseOptionalDate, resolveDateRange } from '../reports/reports.common';
 
 const STALE_AFTER_MS = 30 * 60 * 1000; // matches the scheduled recalculation cadence
 
@@ -68,16 +69,11 @@ export class DashboardService {
       throw new BadRequestException('Both startDate and endDate must be provided together');
     }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // Use shared helpers for parsing and ordering validation
+    const { endDate: end } = resolveDateRange({ startDate, endDate });
 
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      throw new BadRequestException('startDate and endDate must be valid ISO date strings');
-    }
-    if (start > end) {
-      throw new BadRequestException('startDate must be before or equal to endDate');
-    }
-    if (end.getTime() > Date.now()) {
+    const now = Date.now();
+    if (end && end.getTime() > now) {
       throw new BadRequestException('endDate cannot be in the future');
     }
   }

@@ -33,9 +33,37 @@ export class UsersService {
   ) {
     try {
       return await this.prisma.user.update({ where: { id }, data });
-    } catch (error: any) {
-      if (error?.code === 'P2002') {
-        throw new ConflictException('An account with this email address already exists');
+    } catch (error: unknown) {
+      const errorRecord =
+        typeof error === 'object' && error !== null
+          ? (error as { code?: unknown; meta?: unknown })
+          : undefined;
+      const meta =
+        typeof errorRecord?.meta === 'object' && errorRecord.meta !== null
+          ? (errorRecord.meta as Record<string, unknown>)
+          : undefined;
+
+      switch (errorRecord?.code) {
+        case 'P2025':
+          throw new NotFoundException('User not found');
+        case 'P2000': {
+          const column =
+            typeof meta?.column_name === 'string' ? meta.column_name : 'one or more fields';
+          throw new BadRequestException(`Invalid value for ${column}`);
+        }
+        case 'P2002': {
+          const target = meta?.target;
+          const fields =
+            typeof target === 'string'
+              ? [target]
+              : Array.isArray(target)
+                ? target.filter((field): field is string => typeof field === 'string')
+                : [];
+          const fieldLabel = fields.length ? fields.join(', ') : 'a unique field';
+          throw new ConflictException(
+            `A record with the conflicting value for ${fieldLabel} already exists`,
+          );
+        }
       }
       throw error;
     }

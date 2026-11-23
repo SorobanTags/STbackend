@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { CourseStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
@@ -20,12 +20,11 @@ export class SearchService {
 
   async autocomplete(query: string, requestedLimit?: number) {
     const normalizedQuery = this.normalizeQuery(query);
-    if (normalizedQuery.length < this.minQueryLength) {
-      throw new BadRequestException(`Search query must be at least ${this.minQueryLength} characters long`);
-    }
-
     const limit = this.normalizeLimit(requestedLimit);
-    await this.trackSearchTerm(normalizedQuery);
+
+    if (normalizedQuery.length < this.minQueryLength) {
+      return { data: [], meta: { query: normalizedQuery, limit, minQueryLength: this.minQueryLength, total: 0 } };
+    }
 
     const [courses, popularTerms] = await Promise.all([
       this.prisma.course.findMany({
@@ -97,10 +96,12 @@ export class SearchService {
     };
   }
 
-  private async trackSearchTerm(term: string) {
+  async recordSearchTerm(term: string): Promise<void> {
+    const normalizedTerm = this.normalizeQuery(term);
+    if (normalizedTerm.length < this.minQueryLength) return;
     await (this.prisma as any).courseSearchTerm.upsert({
-      where: { term },
-      create: { term, searchCount: 1 },
+      where: { term: normalizedTerm },
+      create: { term: normalizedTerm, searchCount: 1 },
       update: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
     });
   }

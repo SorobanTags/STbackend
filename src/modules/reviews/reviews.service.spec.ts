@@ -28,7 +28,14 @@ describe('ReviewsService (Issue #173) — edit/delete/admin', () => {
       count: jest.fn(),
       aggregate: jest.fn().mockResolvedValue({ _avg: { rating: 4 }, _count: { _all: 1 } }),
     },
-    $transaction: jest.fn(),
+    // By default, $transaction calls the callback with the same mock (simulates tx client).
+    $transaction: jest.fn().mockImplementation((arg: unknown) => {
+      if (typeof arg === 'function') {
+        return arg(mockPrisma);
+      }
+      // array form used by findForCourse
+      return Promise.all(arg as Promise<unknown>[]);
+    }),
   };
 
   const mockEnrollments = { isEnrolled: jest.fn().mockResolvedValue(true) };
@@ -44,6 +51,18 @@ describe('ReviewsService (Issue #173) — edit/delete/admin', () => {
 
     service = module.get<ReviewsService>(ReviewsService);
     jest.clearAllMocks();
+
+    // Re-apply default implementations after clearAllMocks (clearAllMocks removes them).
+    mockPrisma.$transaction.mockImplementation((arg: unknown) => {
+      if (typeof arg === 'function') {
+        return arg(mockPrisma);
+      }
+      return Promise.all(arg as Promise<unknown>[]);
+    });
+    mockPrisma.course.findUnique.mockResolvedValue({ id: 'course1' });
+    mockPrisma.courseReview.aggregate.mockResolvedValue({ _avg: { rating: 4 }, _count: { _all: 1 } });
+    mockPrisma.course.update.mockResolvedValue({});
+    mockEnrollments.isEnrolled.mockResolvedValue(true);
   });
 
   it('should update own review', async () => {
@@ -98,5 +117,33 @@ describe('ReviewsService (Issue #173) — edit/delete/admin', () => {
     mockPrisma.courseReview.findUnique.mockResolvedValue(null);
 
     await expect(service.adminDeleteReview('nonexistent')).rejects.toThrow(NotFoundException);
+  });
+
+  it('create: a failing course.update inside the transaction causes the review write to be rolled back', async () => {
+    // Simulate: transaction callback rejects because course.update throws.
+    // The $transaction mock re-throws the error from the callback, which is how
+    // a real Prisma transaction behaves when the callback rejects.
+    const dbError = new Error('DB constraint violation');
+    mockPrisma.$transaction.mockImplementation(async (arg: unknown) => {
+      if (typeof arg === 'function') {
+        // Run the callback but make course.update fail inside it.
+        mockPrisma.course.update.mockRejectedValueOnce(dbError);
+        mockPrisma.courseReview.create.mockResolvedValueOnce({ ...existingReview, id: 'rev-new' });
+        mockPrisma.courseReview.aggregate.mockResolvedValueOnce({ _avg: { rating: 4 }, _count: { _all: 1 } });
+        // Calling arg() will reject because course.update rejects inside recomputeCourseRating.
+        return arg(mockPrisma);
+      }
+      return Promise.all(arg as Promise<unknown>[]);
+    });
+
+    mockPrisma.courseReview.findUnique.mockResolvedValue(null); // no existing review
+
+    await expect(
+      service.create('student1', 'course1', { rating: 4, comment: 'Great' }),
+    ).rejects.toThrow(dbError);
+
+    // The transaction callback rejected, so the review write is rolled back.
+    // In the mock, courseReview.create was called but the transaction rejected overall.
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
   });
 });

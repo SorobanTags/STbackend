@@ -8,7 +8,7 @@ import {
 } from '@nestjs/terminus';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { EventsService } from '../events/events.service';
+import { PollerHealthIndicator } from '../events/poller-health.indicator';
 import { CacheService } from '../../common/cache/cache.service';
 import { SearchService } from '../search/search.service';
 
@@ -19,7 +19,7 @@ export class HealthController {
     private readonly health: HealthCheckService,
     private readonly prismaHealth: PrismaHealthIndicator,
     private readonly prisma: PrismaService,
-    private readonly events: EventsService,
+    private readonly pollerHealth: PollerHealthIndicator,
     private readonly cache: CacheService,
     private readonly search: SearchService,
   ) {}
@@ -44,7 +44,7 @@ export class HealthController {
     summary: 'Current Stellar event-poller ledger checkpoint (crash recovery)',
   })
   checkpoint() {
-    return this.events.getCheckpointStatus();
+    return this.pollerHealth.getCheckpointStatus();
   }
 
   private async redisPingIndicator(): Promise<HealthIndicatorResult> {
@@ -77,7 +77,7 @@ export class HealthController {
    * Use GET /health/checkpoint for the authoritative checkpoint state.
    */
   private async eventPollerCheckpointIndicator(): Promise<HealthIndicatorResult> {
-    const status = await this.events.getCheckpointStatus();
+    const status = await this.pollerHealth.getCheckpointStatus();
     return {
       event_poller_checkpoint: {
         status: 'up',

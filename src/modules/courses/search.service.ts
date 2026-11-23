@@ -118,8 +118,10 @@ export class SearchService {
   }
 
   private normalizeLimit(limit?: number) {
-    const numericLimit = Number(limit) || this.defaultLimit;
-    return Math.min(Math.max(Math.floor(numericLimit), 1), this.maxLimit);
+    if (limit === undefined || limit === null) {
+      return this.defaultLimit;
+    }
+    return Math.min(Math.max(limit, 1), this.maxLimit);
   }
 
   private rankText(text: string, query: string, baseScore: number) {

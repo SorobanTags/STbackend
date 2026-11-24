@@ -8,7 +8,10 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  });
   const config = app.get(ConfigService);
   const logger = app.get(Logger);
 
@@ -34,7 +37,7 @@ async function bootstrap() {
     SwaggerModule.setup('docs', app, document);
   }
 
-  const port = config.get<number>('PORT', 3000);
+  const port = Number(config.get<string>('PORT', '3000'));
   await app.listen(port);
   logger.log(`Application is running on: ${await app.getUrl()}`);
 }

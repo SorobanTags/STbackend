@@ -1,7 +1,6 @@
 import {
   Controller,
   Get,
-  NotFoundException,
   Param,
   Post,
   UseGuards,
@@ -9,7 +8,6 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
-import { NOTIFICATION_EMAIL_QUEUE } from './queue.constants';
 import { QueueService } from './queue.service';
 
 @ApiTags('queue')
@@ -43,9 +41,6 @@ export class QueueController {
     @Param('queueName') queueName: string,
     @Param('id') jobId: string,
   ) {
-    if (queueName !== NOTIFICATION_EMAIL_QUEUE) {
-      throw new NotFoundException('Queue not found');
-    }
-    return this.queueService.requeueDeadLetterJob(jobId);
+    return this.queueService.requeueDeadLetterJobByName(queueName, jobId);
   }
 }

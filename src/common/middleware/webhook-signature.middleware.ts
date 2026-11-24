@@ -92,6 +92,14 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
   }
 
   use(req: Request & { rawBody?: Buffer }, _res: Response, next: NextFunction) {
+    if (
+      (req as Request & { _webhookSignatureSkipped?: boolean })
+        ._webhookSignatureSkipped
+    ) {
+      next();
+      return;
+    }
+
     // ------------------------------------------------------------------ //
     // 1. Find the incoming signature header.
     // ------------------------------------------------------------------ //

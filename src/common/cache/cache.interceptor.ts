@@ -1,4 +1,6 @@
-// cache.interceptor.ts — issues #41, #42: per-user cache keys + invalidation on mutation
+// cache.interceptor.ts — issue #92: read/write caching + X-Cache-Status header
+// issue #41: await cache writes / log failures; invalidate on mutation
+// issue #42: include user id in cache key for non-public endpoints
 import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Observable, of } from 'rxjs';
@@ -8,7 +10,7 @@ import {
   CACHE_NAMESPACE_KEY,
   CACHE_TTL_KEY,
   CACHE_PUBLIC_KEY,
-  CACHE_INVALIDATES_KEY,
+  CACHE_INVALIDATE_KEY,
 } from './cache.decorator';
 
 @Injectable()
@@ -21,28 +23,22 @@ export class HttpCacheInterceptor implements NestInterceptor {
   ) {}
 
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<any>> {
-    const namespace = this.reflector.getAllAndOverride<string>(CACHE_NAMESPACE_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-
     const request = context.switchToHttp().getRequest();
     const response = context.switchToHttp().getResponse();
 
-    // Handle cache invalidation for mutating methods (Issue #41)
+    // ── Mutation path: invalidate declared namespaces after the handler returns ──
     if (request.method !== 'GET') {
-      const invalidates = this.reflector.getAllAndOverride<string[]>(CACHE_INVALIDATES_KEY, [
+      const namespaces = this.reflector.getAllAndOverride<string[]>(CACHE_INVALIDATE_KEY, [
         context.getHandler(),
         context.getClass(),
       ]);
 
-      if (invalidates?.length) {
+      if (namespaces?.length) {
         return next.handle().pipe(
-          tap(async () => {
-            for (const ns of invalidates) {
-              await this.cache.invalidateNamespace(ns).catch((err: Error) => {
-                this.logger.warn(`Cache invalidation failed for namespace "${ns}": ${err.message}`);
-              });
+          tap(() => {
+            // Fire invalidations in the background; errors are logged by CacheService.
+            for (const ns of namespaces) {
+              void this.cache.invalidateNamespace(ns);
             }
           }),
         );
@@ -50,6 +46,12 @@ export class HttpCacheInterceptor implements NestInterceptor {
 
       return next.handle();
     }
+
+    // ── GET path: serve from cache when available ──────────────────────────────
+    const namespace = this.reflector.getAllAndOverride<string>(CACHE_NAMESPACE_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
 
     if (!namespace) {
       return next.handle();
@@ -60,20 +62,20 @@ export class HttpCacheInterceptor implements NestInterceptor {
       context.getClass(),
     ]);
 
-    // Issue #42: include user id in key unless the handler is explicitly public/shared
     const isPublic = this.reflector.getAllAndOverride<boolean>(CACHE_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
-    ]);
+    ]) ?? false;
 
-    const userSegment = isPublic
-      ? {}
-      : { _uid: (request.user?.id as string | undefined) ?? 'anonymous' };
+    // issue #42: vary the key on user identity unless the endpoint is public.
+    const userId: string = isPublic
+      ? 'anonymous'
+      : (request.user?.id as string | undefined) ?? 'anonymous';
 
     const key = this.cache.buildKey(namespace, {
       ...request.params,
       ...request.query,
-      ...userSegment,
+      _uid: userId,
     });
 
     const cached = await this.cache.get(key);
@@ -85,11 +87,14 @@ export class HttpCacheInterceptor implements NestInterceptor {
 
     response.setHeader('X-Cache-Status', 'MISS');
     return next.handle().pipe(
-      tap((data) => {
-        // Issue #41: await the write and log on failure instead of fire-and-forget
-        this.cache.set(key, data, ttl).catch((err: Error) => {
-          this.logger.warn(`Cache write failed for "${key}": ${err.message}`);
-        });
+      tap(async (data) => {
+        // issue #41: await the write so errors surface through CacheService's
+        // internal logger rather than becoming unhandled promise rejections.
+        try {
+          await this.cache.set(key, data, ttl);
+        } catch (err) {
+          this.logger.warn(`Cache write failed for "${key}": ${(err as Error).message}`);
+        }
       }),
     );
   }

@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ReviewsService } from './reviews.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -98,5 +98,75 @@ describe('ReviewsService (Issue #173) — edit/delete/admin', () => {
     mockPrisma.courseReview.findUnique.mockResolvedValue(null);
 
     await expect(service.adminDeleteReview('nonexistent')).rejects.toThrow(NotFoundException);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #50 — enrollment-gated create paths
+// ---------------------------------------------------------------------------
+describe('ReviewsService — enrollment-gated create (Issue #50)', () => {
+  let service: ReviewsService;
+
+  const mockPrisma = {
+    course: { findUnique: jest.fn(), update: jest.fn() },
+    courseReview: {
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
+      aggregate: jest.fn().mockResolvedValue({ _avg: { rating: 4 }, _count: { _all: 1 } }),
+    },
+    $transaction: jest.fn(),
+  };
+
+  const mockEnrollments = { isEnrolled: jest.fn() };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ReviewsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: EnrollmentsService, useValue: mockEnrollments },
+      ],
+    }).compile();
+    service = module.get<ReviewsService>(ReviewsService);
+    jest.clearAllMocks();
+    mockPrisma.course.findUnique.mockResolvedValue({ id: 'course1' });
+  });
+
+  it('throws ForbiddenException when student is not enrolled', async () => {
+    mockEnrollments.isEnrolled.mockResolvedValue(false);
+    await expect(
+      service.create('student1', 'course1', { rating: 5, comment: 'Great' }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('creates a review when student is enrolled', async () => {
+    mockEnrollments.isEnrolled.mockResolvedValue(true);
+    mockPrisma.courseReview.findUnique.mockResolvedValue(null);
+    const newReview = { id: 'rev2', courseId: 'course1', studentId: 'student1', rating: 5, comment: 'Great' };
+    mockPrisma.courseReview.create.mockResolvedValue(newReview);
+    mockPrisma.courseReview.aggregate.mockResolvedValue({ _avg: { rating: 5 }, _count: { _all: 1 } });
+    mockPrisma.course.update.mockResolvedValue({});
+
+    const result = await service.create('student1', 'course1', { rating: 5, comment: 'Great' });
+    expect(result).toMatchObject({ rating: 5, courseId: 'course1' });
+  });
+
+  it('throws ConflictException when student already reviewed the course', async () => {
+    mockEnrollments.isEnrolled.mockResolvedValue(true);
+    mockPrisma.courseReview.findUnique.mockResolvedValue({ id: 'existing-rev' });
+    await expect(
+      service.create('student1', 'course1', { rating: 4, comment: 'Good' }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('throws NotFoundException when course does not exist', async () => {
+    mockPrisma.course.findUnique.mockResolvedValue(null);
+    await expect(
+      service.create('student1', 'no-course', { rating: 4, comment: 'Good' }),
+    ).rejects.toThrow(NotFoundException);
   });
 });

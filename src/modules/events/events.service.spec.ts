@@ -124,6 +124,54 @@ describe('EventsService — ledger checkpoint (Issue #80)', () => {
     });
   });
 
+  describe('pollEvents — overlap guard', () => {
+    it('skips concurrent polls and releases the guard when the active poll settles', async () => {
+      mockPrisma.eventPollerCheckpoint.findUnique.mockResolvedValue(null);
+      mockStellar.getLatestLedger.mockResolvedValue(100);
+      await service.onModuleInit();
+      jest.clearAllMocks();
+      mockPrisma.eventPollerCheckpoint.upsert.mockResolvedValue({});
+      mockPrisma.chainEvent.create.mockResolvedValue({});
+
+      type ContractEvent = {
+        ledger: number;
+        topic: string[];
+        value: string;
+        txHash: string;
+      };
+      let resolveFetch!: (events: ContractEvent[]) => void;
+      const pendingFetch = new Promise<ContractEvent[]>((resolve) => {
+        resolveFetch = resolve;
+      });
+      mockStellar.fetchContractEvents
+        .mockReturnValueOnce(pendingFetch)
+        .mockResolvedValueOnce([]);
+
+      const activePoll = service.pollEvents();
+      await Promise.resolve();
+      await service.pollEvents();
+
+      expect(mockStellar.fetchContractEvents).toHaveBeenCalledTimes(1);
+      expect((await service.getCheckpointStatus()).lastProcessedLedger).toBe(90);
+
+      resolveFetch([
+        {
+          ledger: 105,
+          topic: ['course_registered'],
+          value: 'COURSE-1',
+          txHash: 'tx-1',
+        },
+      ]);
+      await activePoll;
+
+      expect((await service.getCheckpointStatus()).lastProcessedLedger).toBe(106);
+
+      await service.pollEvents();
+
+      expect(mockStellar.fetchContractEvents).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('pollEvents — checkpoint write failures do not block polling', () => {
     beforeEach(async () => {
       mockPrisma.eventPollerCheckpoint.findUnique.mockResolvedValue(null);

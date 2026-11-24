@@ -48,6 +48,7 @@ export interface CheckpointStatus {
 export class EventsService implements OnModuleInit {
   private readonly logger = new Logger(EventsService.name);
   private lastProcessedLedger = 0;
+  private isPolling = false;
 
   // Checkpoint bookkeeping (in-memory mirror of the DB row).
   private resumedFromCheckpoint = false;
@@ -101,6 +102,12 @@ export class EventsService implements OnModuleInit {
 
   @Cron(CronExpression.EVERY_5_SECONDS)
   async pollEvents() {
+    if (this.isPolling) {
+      this.logger.warn('Skipping event poll because a previous poll is still running');
+      return;
+    }
+
+    this.isPolling = true;
     try {
       const events = await this.stellar.fetchContractEvents(this.lastProcessedLedger);
 
@@ -115,10 +122,14 @@ export class EventsService implements OnModuleInit {
     } catch (error) {
       this.logger.error('Event polling failed', error.message);
     } finally {
-      // Persist progress even when a poll finds nothing — a checkpoint write
-      // failure is logged but never allowed to stop the poll loop.
-      this.lastPolledAt = new Date();
-      await this.persistCheckpoint();
+      try {
+        // Persist progress even when a poll finds nothing — a checkpoint write
+        // failure is logged but never allowed to stop the poll loop.
+        this.lastPolledAt = new Date();
+        await this.persistCheckpoint();
+      } finally {
+        this.isPolling = false;
+      }
     }
   }
 

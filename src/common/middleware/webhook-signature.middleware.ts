@@ -91,7 +91,21 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
     }
   }
 
-  use(req: Request & { rawBody?: Buffer }, _res: Response, next: NextFunction) {
+  use(req: Request & { rawBody?: Buffer } & Record<string, unknown>, _res: Response, next: NextFunction) {
+    // ------------------------------------------------------------------ //
+    // 0. Check whether WebhookSkipGuard already stamped this request.
+    //    Routes decorated with @SkipWebhookSignature() have the guard run
+    //    first; it sets req['_webhookSignatureSkipped'] = true so the
+    //    middleware can honour the opt-out without needing Reflector access.
+    // ------------------------------------------------------------------ //
+    if (req['_webhookSignatureSkipped'] === true) {
+      this.logger.debug(
+        `Webhook signature check skipped for ${req.method} ${req.originalUrl} ` +
+          `(route is decorated with @SkipWebhookSignature())`,
+      );
+      return next();
+    }
+
     // ------------------------------------------------------------------ //
     // 1. Find the incoming signature header.
     // ------------------------------------------------------------------ //

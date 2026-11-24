@@ -83,10 +83,25 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
   ) {
     this.defaultSecret = this.config.get<string>('WEBHOOK_SECRET');
 
-    if (!this.defaultSecret) {
+    const configuredProviders = Object.keys(process.env)
+      .filter(
+        (key) =>
+          key.startsWith('WEBHOOK_SECRET_') &&
+          Boolean(process.env[key]),
+      )
+      .map((key) => key.slice('WEBHOOK_SECRET_'.length).toLowerCase())
+      .sort();
+
+    this.logger.log(
+      `Provider-specific webhook secrets configured for: ${
+        configuredProviders.length > 0 ? configuredProviders.join(', ') : 'none'
+      }`,
+    );
+
+    if (!this.defaultSecret && configuredProviders.length === 0) {
       this.logger.warn(
-        'WEBHOOK_SECRET is not set. All webhook requests will be rejected ' +
-          'unless a provider-specific WEBHOOK_SECRET_<NAME> is configured.',
+        'WEBHOOK_SECRET is not set and no provider-specific webhook secrets are configured. ' +
+          'All webhook requests will be rejected.',
       );
     }
   }
@@ -132,7 +147,11 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
         `No webhook secret configured for provider="${provider ?? 'default'}". ` +
           `Set WEBHOOK_SECRET${provider ? `_${provider.toUpperCase()}` : ''} in your environment.`,
       );
-      throw new ForbiddenException('Webhook endpoint is not configured.');
+      throw new UnauthorizedException(
+        `No webhook secret configured for ${
+          provider ? `provider "${provider}"` : 'the default route'
+        }.`,
+      );
     }
 
     // ------------------------------------------------------------------ //

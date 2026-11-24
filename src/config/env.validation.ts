@@ -442,10 +442,10 @@ export class EnvironmentVariables {
   // ----------------------------------------------------------
   // Webhook signatures
   // ----------------------------------------------------------
-  @IsDefined()
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  WEBHOOK_SECRET: string;
+  WEBHOOK_SECRET?: string;
 
   @IsOptional()
   @IsString()

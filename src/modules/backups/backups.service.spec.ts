@@ -184,6 +184,30 @@ describe("BackupsService", () => {
       await expect(
         service.exportCourseBackup("course-123", unauthorizedInstructor),
       ).rejects.toThrow(ForbiddenException);
+
+      expect(mockPrisma.courseBackup.create).not.toHaveBeenCalled();
+    });
+
+    it("should NOT call courseBackup.create when course is not found", async () => {
+      mockPrisma.course.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.exportCourseBackup("non-existent"),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(mockPrisma.courseBackup.create).not.toHaveBeenCalled();
+    });
+
+    it("should proceed without access check when no user is provided (automatic path)", async () => {
+      mockPrisma.course.findUnique.mockResolvedValue(sampleCourse);
+      mockPrisma.courseBackup.findFirst.mockResolvedValue(null);
+      mockPrisma.courseBackup.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: "backup-auto", ...data }),
+      );
+
+      const result = await service.exportCourseBackup("course-123");
+      expect(result).toBeDefined();
+      expect(mockPrisma.courseBackup.create).toHaveBeenCalled();
     });
   });
 

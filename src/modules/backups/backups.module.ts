@@ -14,6 +14,15 @@ import { DbBackupVerificationService } from "./db-backup-verification.service";
 import { BackupsController } from "./backups.controller";
 import { BackupsService } from "./backups.service";
 
+export function createBackupS3Client(config: ConfigService): S3Client {
+  const endpoint = config.get<string>("BACKUP_S3_ENDPOINT");
+
+  return new S3Client({
+    region: config.get<string>("AWS_REGION", "us-east-1"),
+    ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
+  });
+}
+
 @Module({
   imports: [ConfigModule, EnrollmentsModule],
   controllers: [
@@ -29,14 +38,7 @@ import { BackupsService } from "./backups.service";
     {
       provide: DB_BACKUP_S3_CLIENT,
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const endpoint = config.get<string>("BACKUP_S3_ENDPOINT");
-
-        return new S3Client({
-          region: config.get<string>("AWS_REGION", "us-east-1"),
-          ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
-        });
-      },
+      useFactory: createBackupS3Client,
     },
     DbBackupService,
     DbBackupVerificationService,

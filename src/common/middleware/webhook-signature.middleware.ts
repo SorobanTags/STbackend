@@ -27,6 +27,7 @@ import {
   NestMiddleware,
   UnauthorizedException,
   ForbiddenException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
@@ -138,14 +139,14 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
     // ------------------------------------------------------------------ //
     // 3. Require a raw body — needs { rawBody: true } in NestFactory.create.
     // ------------------------------------------------------------------ //
-    if (!req.rawBody || req.rawBody.length === 0) {
+    if (req.rawBody === undefined) {
       this.logger.error(
         'rawBody is unavailable. Ensure NestFactory.create is called with ' +
           '{ rawBody: true } in main.ts.',
       );
       // Treat as a server configuration problem, not a client error.
-      throw new ForbiddenException(
-        'Webhook signature verification is misconfigured on the server.',
+      throw new InternalServerErrorException(
+        'Webhook raw body is unavailable; signature verification cannot proceed.',
       );
     }
 

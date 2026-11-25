@@ -105,6 +105,35 @@ describe('AnalyticsService', () => {
         { eventType: 'click', count: 4 },
       ]);
     });
+
+    it('passes the validated bounded range to groupBy', async () => {
+      mockPrisma.analyticsEvent.groupBy.mockResolvedValue([]);
+
+      await service.getVolumeByEventType('2026-01-01', '2026-01-31');
+
+      expect(mockPrisma.analyticsEvent.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            occurredAt: {
+              gte: new Date('2026-01-01'),
+              lte: new Date('2026-01-31'),
+            },
+          },
+        }),
+      );
+    });
+
+    it('throws when from/to are missing', async () => {
+      await expect(
+        service.getVolumeByEventType(undefined, undefined),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws when the range exceeds 90 days', async () => {
+      await expect(
+        service.getVolumeByEventType('2026-01-01', '2026-06-01'),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('queryRawEvents()', () => {
@@ -129,6 +158,33 @@ describe('AnalyticsService', () => {
         limit: 10,
         totalPages: 1,
       });
+    });
+
+    it('passes the validated bounded range to findMany', async () => {
+      mockPrisma.analyticsEvent.findMany.mockResolvedValue([]);
+      mockPrisma.analyticsEvent.count.mockResolvedValue(0);
+
+      await service.queryRawEvents({
+        from: '2026-01-01',
+        to: '2026-01-31',
+      });
+
+      expect(mockPrisma.analyticsEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            occurredAt: {
+              gte: new Date('2026-01-01'),
+              lte: new Date('2026-01-31'),
+            },
+          },
+        }),
+      );
+    });
+
+    it('throws when the range exceeds 90 days', async () => {
+      await expect(
+        service.queryRawEvents({ from: '2026-01-01', to: '2026-06-01' }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

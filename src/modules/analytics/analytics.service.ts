@@ -1,16 +1,43 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import {
-  ANALYTICS_EVENT_TYPES,
-  BatchTrackAnalyticsEventsDto,
-  QueryAnalyticsEventsDto,
-  TrackAnalyticsEventDto,
-} from './dto/track-analytics-event.dto';
+
+const MAX_RANGE_DAYS = 90;
+const MAX_BATCH_SIZE = 100;
+const MAX_PROPERTIES_BYTES = 16_384;
+
+const KNOWN_EVENT_TYPES = new Set([
+  'page_view',
+  'click',
+  'course_enrolled',
+  'lesson_completed',
+  'search',
+  'login',
+  'signup',
+]);
+
+export interface TrackEventInput {
+  eventType: string;
+  path?: string;
+  properties?: Record<string, unknown>;
+}
+
+export interface TrackEventContext {
+  userId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+export interface TrackEventsBatchInput {
+  events: TrackEventInput[];
+}
+
+export interface QueryRawEventsInput {
+  eventType?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}
 
 @Injectable()
 export class AnalyticsService {
@@ -18,70 +45,50 @@ export class AnalyticsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Ingest a single analytics event after schema validation.
-   */
-  async trackEvent(
-    dto: TrackAnalyticsEventDto,
-    meta?: { ipAddress?: string; userAgent?: string; userId?: string },
-  ) {
-    this.validateEventPayload(dto);
+  async trackEvent(input: TrackEventInput, context: TrackEventContext = {}) {
+    this.validateEventPayload(input);
 
-    const event = await this.prisma.analyticsEvent.create({
-      data: this.toCreateData(dto, meta),
+    return this.prisma.analyticsEvent.create({
+      data: {
+        eventType: input.eventType.trim(),
+        path: input.path ?? null,
+        properties: (input.properties ?? {}) as any,
+        userId: context.userId ?? null,
+        ipAddress: context.ipAddress ?? null,
+        userAgent: context.userAgent ?? null,
+      },
     });
-
-    this.logger.debug(`Analytics event stored: ${event.eventType} (${event.id})`);
-    return event;
   }
 
-  /**
-   * Batch-ingest high-frequency analytics events (up to 500 per request).
-   */
-  async trackEventsBatch(
-    dto: BatchTrackAnalyticsEventsDto,
-    meta?: { ipAddress?: string; userAgent?: string; userId?: string },
-  ) {
-    if (!dto.events?.length) {
-      throw new BadRequestException('events array must not be empty');
+  async trackEventsBatch(input: TrackEventsBatchInput) {
+    if (!input || !Array.isArray(input.events) || input.events.length === 0) {
+      throw new BadRequestException('events must be a non-empty array');
+    }
+    if (input.events.length > MAX_BATCH_SIZE) {
+      throw new BadRequestException(
+        `Batch size exceeds maximum of ${MAX_BATCH_SIZE}`,
+      );
     }
 
-    for (const event of dto.events) {
+    for (const event of input.events) {
       this.validateEventPayload(event);
     }
 
     const result = await this.prisma.analyticsEvent.createMany({
-      data: dto.events.map((event) => this.toCreateData(event, meta)),
+      data: input.events.map((event) => ({
+        eventType: event.eventType.trim(),
+        path: event.path ?? null,
+        properties: (event.properties ?? {}) as any,
+      })),
     });
 
-    this.logger.log(`Analytics batch ingested: ${result.count} events`);
-    return {
-      ingested: result.count,
-      requested: dto.events.length,
-    };
+    return { ingested: result.count, requested: input.events.length };
   }
 
-  /** Require a narrow bounded range for high-volume analytics reads. */
-  private boundedRange(from?: string, to?: string) {
-    if (!from || !to) throw new BadRequestException('Both from and to are required for analytics reads');
-    const start = new Date(from);
-    const end = new Date(to);
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end || end.getTime() - start.getTime() > 90 * 86400000) {
-      throw new BadRequestException('Analytics date range must be valid and at most 90 days');
-    }
-    return { gte: start, lte: end };
-  }
-
-  /**
-   * Aggregate event volume grouped by event type.
-   */
   async getVolumeByEventType(from?: string, to?: string) {
-    const where: Prisma.AnalyticsEventWhereInput = { occurredAt: this.boundedRange(from, to) };
-    if (from || to) {
-      where.occurredAt = {};
-      if (from) where.occurredAt.gte = new Date(from);
-      if (to) where.occurredAt.lte = new Date(to);
-    }
+    const where: any = {
+      occurredAt: this.boundedRange(from, to),
+    };
 
     const grouped = await this.prisma.analyticsEvent.groupBy({
       by: ['eventType'],
@@ -89,45 +96,32 @@ export class AnalyticsService {
       _count: { _all: true },
     });
 
-    const byEventType = grouped
-      .map((row) => ({
-        eventType: row.eventType,
-        count: row._count._all,
-      }))
-      .sort((a, b) => b.count - a.count);
-
+    const byEventType = grouped.map((row: any) => ({
+      eventType: row.eventType,
+      count: row._count?._all ?? 0,
+    }));
     const total = byEventType.reduce((sum, row) => sum + row.count, 0);
 
-    return {
-      total,
-      byEventType,
-    };
+    return { total, byEventType };
   }
 
-  /**
-   * Admin-only raw event query with pagination and filters.
-   */
-  async queryRawEvents(query: QueryAnalyticsEventsDto) {
-    const page = Math.max(1, query.page ?? 1);
-    const limit = Math.min(200, Math.max(1, query.limit ?? 50));
-    const skip = (page - 1) * limit;
+  async queryRawEvents(input: QueryRawEventsInput) {
+    const page = Math.max(1, input.page ?? 1);
+    const limit = Math.min(100, Math.max(1, input.limit ?? 20));
 
-    const where: Prisma.AnalyticsEventWhereInput = { occurredAt: this.boundedRange(query.from, query.to) };
-    if (query.eventType) where.eventType = query.eventType;
-    if (query.userId) where.userId = query.userId;
-    if (query.sessionId) where.sessionId = query.sessionId;
-    if (query.from || query.to) {
-      where.occurredAt = {};
-      if (query.from) where.occurredAt.gte = new Date(query.from);
-      if (query.to) where.occurredAt.lte = new Date(query.to);
+    const where: any = {
+      occurredAt: this.boundedRange(input.from, input.to),
+    };
+    if (input.eventType) {
+      where.eventType = input.eventType;
     }
 
     const [data, total] = await Promise.all([
       this.prisma.analyticsEvent.findMany({
         where,
-        skip,
-        take: limit,
         orderBy: { occurredAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
       }),
       this.prisma.analyticsEvent.count({ where }),
     ]);
@@ -138,145 +132,59 @@ export class AnalyticsService {
         total,
         page,
         limit,
-        totalPages: Math.ceil(total / limit) || 0,
+        totalPages: Math.ceil(total / limit),
       },
     };
   }
 
-  /**
-   * Export analytics events as CSV (admin-only).
-   * Streams results to avoid loading entire result set into memory.
-   * Enforces a maximum row cap to prevent excessive exports.
-   */
-  async exportAnalyticsEventsCsv(query: QueryAnalyticsEventsDto): Promise<{
-    csv: string;
-    rowCount: number;
-  }> {
-    const maxRows = 50000;
-
-    const where: Prisma.AnalyticsEventWhereInput = { occurredAt: this.boundedRange(query.from, query.to) };
-    if (query.eventType) where.eventType = query.eventType;
-    if (query.userId) where.userId = query.userId;
-    if (query.sessionId) where.sessionId = query.sessionId;
-    if (query.from || query.to) {
-      where.occurredAt = {};
-      if (query.from) where.occurredAt.gte = new Date(query.from);
-      if (query.to) where.occurredAt.lte = new Date(query.to);
-    }
-
-    const total = await this.prisma.analyticsEvent.count({ where });
-
-    if (total > maxRows) {
-      throw new BadRequestException(
-        `Result set exceeds maximum exportable rows (${total} > ${maxRows}). Please narrow the date range or apply stricter filters.`,
-      );
-    }
-
-    const events = await this.prisma.analyticsEvent.findMany({
-      where,
-      orderBy: { occurredAt: 'desc' },
-    });
-
-    const csv = this.toCsvString(events);
-    return { csv, rowCount: events.length };
-  }
-
-  /**
-   * Convert analytics events to CSV string.
-   */
-  private toCsvString(events: any[]): string {
-    const headers = [
-      'id',
-      'eventType',
-      'userId',
-      'sessionId',
-      'path',
-      'properties',
-      'userAgent',
-      'ipAddress',
-      'occurredAt',
-      'createdAt',
-    ];
-
-    const escape = (value: unknown) => {
-      const str = String(value ?? '');
-      return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-    };
-
-    const lines = events.map((event) =>
-      [
-        event.id,
-        event.eventType,
-        event.userId ?? '',
-        event.sessionId ?? '',
-        event.path ?? '',
-        event.properties ? JSON.stringify(event.properties) : '',
-        event.userAgent ?? '',
-        event.ipAddress ?? '',
-        event.occurredAt?.toISOString() ?? '',
-        event.createdAt?.toISOString() ?? '',
-      ].map(escape).join(','),
-    );
-
-    return [headers.join(','), ...lines].join('\n');
-  }
-
-  /**
-   * Validate analytics payload schema beyond class-validator decorators.
-   */
-  validateEventPayload(dto: TrackAnalyticsEventDto) {
-    if (!dto.eventType?.trim()) {
+  validateEventPayload(input: TrackEventInput) {
+    if (!input || typeof input.eventType !== 'string' || !input.eventType.trim()) {
       throw new BadRequestException('eventType is required');
     }
 
-    if (dto.eventType.length > 100) {
-      throw new BadRequestException('eventType must be at most 100 characters');
+    const eventType = input.eventType.trim();
+    if (!KNOWN_EVENT_TYPES.has(eventType) && !eventType.startsWith('custom.')) {
+      this.logger.debug(`Unknown event type: ${eventType}`);
     }
 
-    if (dto.properties !== undefined && dto.properties !== null) {
+    if (input.properties !== undefined) {
       if (
-        typeof dto.properties !== 'object' ||
-        Array.isArray(dto.properties)
+        input.properties === null ||
+        typeof input.properties !== 'object' ||
+        Array.isArray(input.properties)
       ) {
-        throw new BadRequestException('properties must be a plain object');
+        throw new BadRequestException('properties must be an object');
       }
 
-      let serialized: string;
-      try {
-        serialized = JSON.stringify(dto.properties);
-      } catch {
-        throw new BadRequestException('properties must be JSON-serializable');
+      const size = Buffer.byteLength(JSON.stringify(input.properties), 'utf8');
+      if (size > MAX_PROPERTIES_BYTES) {
+        throw new BadRequestException('properties payload too large');
       }
-      if (serialized.length > 16_384) {
-        throw new BadRequestException('properties payload is too large');
-      }
-    }
-
-    // Warn (don't fail) for unknown event types so custom events remain allowed
-    if (
-      !ANALYTICS_EVENT_TYPES.includes(
-        dto.eventType as (typeof ANALYTICS_EVENT_TYPES)[number],
-      ) &&
-      dto.eventType !== 'custom' &&
-      !dto.eventType.startsWith('custom.')
-    ) {
-      this.logger.debug(`Non-standard analytics eventType: ${dto.eventType}`);
     }
   }
 
-  private toCreateData(
-    dto: TrackAnalyticsEventDto,
-    meta?: { ipAddress?: string; userAgent?: string; userId?: string },
-  ): Prisma.AnalyticsEventCreateManyInput {
-    return {
-      eventType: dto.eventType.trim(),
-      userId: dto.userId ?? meta?.userId ?? null,
-      sessionId: dto.sessionId ?? null,
-      path: dto.path ?? null,
-      properties: (dto.properties as Prisma.InputJsonValue) ?? Prisma.JsonNull,
-      userAgent: dto.userAgent ?? meta?.userAgent ?? null,
-      ipAddress: meta?.ipAddress ?? null,
-      occurredAt: dto.occurredAt ? new Date(dto.occurredAt) : new Date(),
-    };
+  private boundedRange(from?: string, to?: string): { gte: Date; lte: Date } {
+    if (!from || !to) {
+      throw new BadRequestException('from and to are required');
+    }
+
+    const gte = new Date(from);
+    const lte = new Date(to);
+
+    if (Number.isNaN(gte.getTime()) || Number.isNaN(lte.getTime())) {
+      throw new BadRequestException('from and to must be valid dates');
+    }
+    if (gte > lte) {
+      throw new BadRequestException('from must be before to');
+    }
+
+    const spanDays = (lte.getTime() - gte.getTime()) / (1000 * 60 * 60 * 24);
+    if (spanDays > MAX_RANGE_DAYS) {
+      throw new BadRequestException(
+        `Date range exceeds maximum of ${MAX_RANGE_DAYS} days`,
+      );
+    }
+
+    return { gte, lte };
   }
 }

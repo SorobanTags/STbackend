@@ -10,6 +10,14 @@ import { CreateExamDto } from './dto/create-exam.dto';
 import { SubmitExamDto } from './dto/submit-exam.dto';
 import { UserRole } from '@prisma/client';
 
+export interface ExamEligibility {
+  eligible: boolean;
+  reason?: string;
+  passed?: boolean;
+  cooldownEndsAt?: Date;
+  remainingMinutes?: number;
+}
+
 @Injectable()
 export class ExamsService {
   private readonly logger = new Logger(ExamsService.name);
@@ -88,7 +96,7 @@ export class ExamsService {
   /**
    * Check if a student is eligible to take the exam.
    */
-  async checkEligibility(studentId: string, examId: string) {
+  async checkEligibility(studentId: string, examId: string): Promise<ExamEligibility> {
     const exam = await this.getExamById(examId);
 
     // Verify course enrollment & completion progress
@@ -156,7 +164,7 @@ export class ExamsService {
    */
   async submitExam(studentId: string, examId: string, dto: SubmitExamDto) {
     const eligibility = await this.checkEligibility(studentId, examId);
-    if (!eligibility.eligible) {
+    if (eligibility.eligible === false) {
       throw new ForbiddenException(eligibility.reason);
     }
 
@@ -285,19 +293,6 @@ export class ExamsService {
       exam.course?.instructorAddress === userId;
 
     if (!isAdmin && !isOwner) {
-      throw new ForbiddenException('Only the course instructor or an admin can delete this exam');
-    }
+      throw new ForbiddenException('Only the course instructor or an admin can delete
 
-    const existingAttempt = await this.prisma.examAttempt.findFirst({
-      where: { examId },
-    });
-
-    if (existingAttempt) {
-      throw new BadRequestException('Cannot delete exam with existing student attempts');
-    }
-
-    return this.prisma.exam.delete({
-      where: { id: examId },
-    });
-  }
-}
+/* … truncated 329 chars — edit only what you need near the top … */

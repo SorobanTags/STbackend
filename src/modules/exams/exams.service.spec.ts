@@ -89,6 +89,28 @@ describe('ExamsService', () => {
       expect(res.reason).toContain('cooldown');
     });
 
+    it('should return cooldownEndsAt and positive remainingMinutes on cooldown branch', async () => {
+      mockPrisma.exam.findUnique.mockResolvedValue({
+        id: 'exam-1',
+        courseId: 'course-1',
+        cooldownHours: 24,
+      });
+      mockPrisma.enrollment.findUnique.mockResolvedValue({
+        progressPercent: 100,
+        status: 'COMPLETED',
+      });
+      const attemptedAt = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
+      mockPrisma.examAttempt.findFirst.mockResolvedValue({
+        passed: false,
+        attemptedAt,
+      });
+
+      const res = await service.checkEligibility('student-1', 'exam-1');
+      expect(res.eligible).toBe(false);
+      expect(res.cooldownEndsAt).toBeInstanceOf(Date);
+      expect(res.remainingMinutes).toBeGreaterThan(0);
+    });
+
     it('should return eligible if requirements are met', async () => {
       mockPrisma.exam.findUnique.mockResolvedValue({
         id: 'exam-1',

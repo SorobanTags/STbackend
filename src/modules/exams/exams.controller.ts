@@ -10,7 +10,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { ExamsService } from './exams.service';
+import { ExamsService, ExamEligibility } from './exams.service';
 import { CreateExamDto } from './dto/create-exam.dto';
 import { SubmitExamDto } from './dto/submit-exam.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -48,7 +48,7 @@ export class ExamsController {
   async checkEligibility(
     @CurrentUser('id') userId: string,
     @Param('id') examId: string,
-  ) {
+  ): Promise<ExamEligibility> {
     return this.examsService.checkEligibility(userId, examId);
   }
 

@@ -96,6 +96,17 @@ export class QueueService {
     private readonly notificationEmailQueue: Queue<NotificationEmailJobData>,
   ) {}
 
+  hasQueue(name: string): boolean {
+    return [this.notificationEmailQueue].some((q) => q.name === name);
+  }
+
+  async requeueDeadLetterJobByName(queueName: string, jobId: string): Promise<QueueJobStatus> {
+    if (!this.hasQueue(queueName)) {
+      throw new NotFoundException('Queue not found');
+    }
+    return this.requeueDeadLetterJob(jobId);
+  }
+
   async enqueueNotificationEmail(payload: unknown, correlationId?: string) {
     const data = plainToInstance(NotificationEmailJobData, payload);
     const errors = validateSync(data, {

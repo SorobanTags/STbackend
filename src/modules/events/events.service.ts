@@ -93,11 +93,19 @@ export class EventsService implements OnModuleInit {
     }
 
     // Cold start — no usable checkpoint yet.
-    this.lastProcessedLedger =
-      latestLedger !== null ? Math.max(1, latestLedger - COLD_START_LOOKBACK) : 1;
-    this.resumedFromCheckpoint = false;
-    this.logger.log(`Event poller initialised at ledger ${this.lastProcessedLedger}`);
-    await this.persistCheckpoint();
+    if (latestLedger !== null) {
+      this.lastProcessedLedger = Math.max(1, latestLedger - COLD_START_LOOKBACK);
+      this.resumedFromCheckpoint = false;
+      this.logger.log(`Event poller initialised at ledger ${this.lastProcessedLedger}`);
+      await this.persistCheckpoint();
+    } else {
+      // Chain tip unknown — leave lastProcessedLedger at 0 so pollEvents
+      // resolves it lazily on the first tick rather than writing ledger 1.
+      this.resumedFromCheckpoint = false;
+      this.logger.warn(
+        'Event poller deferred: chain tip unknown at boot, will retry on first poll',
+      );
+    }
   }
 
   @Cron(CronExpression.EVERY_5_SECONDS)
@@ -108,8 +116,28 @@ export class EventsService implements OnModuleInit {
     }
 
     this.isPolling = true;
+
+    // Lazy tip resolution: if onModuleInit could not fetch the chain tip we
+    // retry here before the first fetch so we start near the tip, not ledger 1.
+    if (this.lastProcessedLedger === 0) {
+      try {
+        const latestLedger = await this.stellar.getLatestLedger();
+        this.lastProcessedLedger = Math.max(1, latestLedger - COLD_START_LOOKBACK);
+        this.logger.log(
+          `Resolved chain tip on first poll; starting at ledger ${this.lastProcessedLedger}`,
+        );
+        await this.persistCheckpoint();
+      } catch {
+        this.logger.warn('Chain tip still unreachable; skipping this poll tick');
+        this.isPolling = false;
+        return;
+      }
+    }
+
+    let fetchSucceeded = false;
     try {
       const events = await this.stellar.fetchContractEvents(this.lastProcessedLedger);
+      fetchSucceeded = true;
 
       if (events.length) {
         this.logger.log(`Processing ${events.length} chain event(s)`);
@@ -120,16 +148,25 @@ export class EventsService implements OnModuleInit {
         }
       }
     } catch (error) {
-      this.logger.error('Event polling failed', error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Event polling failed', message);
     } finally {
+      this.lastPolledAt = new Date();
+    }
+
+    // Only advance the persisted checkpoint when the fetch actually succeeded.
+    // A failed fetch must not move the checkpoint forward, otherwise events
+    // missed during the outage would be skipped on the next poll. A successful
+    // poll that found zero events still persists (to record lastPolledAt).
+    if (fetchSucceeded) {
       try {
-        // Persist progress even when a poll finds nothing — a checkpoint write
-        // failure is logged but never allowed to stop the poll loop.
-        this.lastPolledAt = new Date();
         await this.persistCheckpoint();
-      } finally {
-        this.isPolling = false;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error('Checkpoint persistence failed', message);
       }
+    }
+    this.isPolling = false;
     }
   }
 

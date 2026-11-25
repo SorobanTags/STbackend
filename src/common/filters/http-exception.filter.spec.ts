@@ -135,6 +135,32 @@ describe('HttpExceptionFilter', () => {
     expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
+  it('returns the documented message string for each mapped Prisma code', () => {
+    const cases: [string, string][] = [
+      ['P2002', 'A record with this value already exists'],
+      ['P2025', 'The requested record was not found'],
+      ['P2003', 'The request references a related record that does not exist'],
+    ];
+    for (const [code, expectedMessage] of cases) {
+      jest.clearAllMocks();
+      filter.catch(prismaError(code), host);
+      expect(response.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expectedMessage }),
+      );
+    }
+  });
+
+  it('maps an unmapped Prisma code (P2000) to 500 and reports to Sentry', () => {
+    const err = prismaError('P2000');
+    filter.catch(err, host);
+
+    expect(response.status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: HttpStatus.INTERNAL_SERVER_ERROR, message: 'Internal server error' }),
+    );
+    expect(Sentry.captureException).toHaveBeenCalledWith(err, expect.any(Object));
+  });
+
   it('does not leak Prisma stack traces in mapped responses', () => {
     filter.catch(prismaError('P2002'), host);
 

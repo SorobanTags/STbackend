@@ -2,12 +2,13 @@
 import { Module } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { EventsController } from './events.controller';
+import { PollerHealthIndicator } from './poller-health.indicator';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [NotificationsModule],
-  providers: [EventsService],
+  imports: [NotificationsModule, EnrollmentsModule, CoursesModule],
+  providers: [EventsService, PollerHealthIndicator],
   controllers: [EventsController],
-  exports: [EventsService],
+  exports: [EventsService, PollerHealthIndicator],
 })
 export class EventsModule {}

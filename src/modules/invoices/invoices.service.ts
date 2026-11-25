@@ -81,7 +81,10 @@ export class InvoicesService {
     if (!txHash) return;
 
     const txStatus = await this.stellar.getTransactionStatus(txHash);
-    if (txStatus && !txStatus.successful) {
+    if (!txStatus) {
+      throw new BadRequestException('Cannot invoice a payment whose on-chain transaction could not be found');
+    }
+    if (!txStatus.successful) {
       throw new BadRequestException('Cannot invoice a payment whose on-chain transaction did not succeed');
     }
   }

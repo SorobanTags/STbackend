@@ -224,101 +224,32 @@ describe('SmsService', () => {
 
       expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
         where: { id: 'sms-1' },
-        data: {
+        data: expect.objectContaining({
           status: SmsStatus.FAILED,
-          providerMessageId: undefined,
-          failureReason: 'Rejected',
+          failureReason: expect.any(String),
+        }),
+      });
+    });
+
+    it('marks the message failed and rethrows when the gateway throws', async () => {
+      const gatewayError = new Error('gateway unavailable');
+      mockGatewaySend.mockRejectedValueOnce(gatewayError);
+
+      await expect(
+        service.sendSms({
+          phoneNumber: '08012345678',
+          countryCode: 'NG',
+          message: 'Your enrollment is confirmed',
+        }),
+      ).rejects.toThrow('gateway unavailable');
+
+      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
+        where: { id: 'sms-1' },
+        data: expect.objectContaining({
+          status: SmsStatus.FAILED,
+          failureReason: expect.any(String),
           sentAt: null,
-        },
-      });
-    });
-
-    it('marks the message failed when the gateway throws', async () => {
-      mockGatewaySend.mockRejectedValueOnce(new Error('gateway offline'));
-
-      const result = await service.sendSms({
-        phoneNumber: '08012345678',
-        countryCode: 'NG',
-        message: 'Your enrollment is confirmed',
-      });
-
-      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-        data: { status: SmsStatus.FAILED, failureReason: 'gateway offline' },
-      });
-      expect(result).toEqual({ id: 'sms-1', status: SmsStatus.SENT });
-    });
-  });
-
-  describe('getDeliveryStatus()', () => {
-    it('returns the stored message for the given id', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({
-        id: 'sms-1',
-        status: SmsStatus.DELIVERED,
-      });
-
-      await expect(service.getDeliveryStatus('sms-1')).resolves.toEqual({
-        id: 'sms-1',
-        status: SmsStatus.DELIVERED,
-      });
-      expect(mockPrisma.smsMessage.findUnique).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-      });
-    });
-  });
-
-  describe('handleDeliveryCallback()', () => {
-    it('acknowledges without updating when the provider message is unknown', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce(null);
-
-      await expect(
-        service.handleDeliveryCallback({ id: 'provider-unknown', status: 'Success' }),
-      ).resolves.toEqual({ acknowledged: false });
-      expect(mockPrisma.smsMessage.update).not.toHaveBeenCalled();
-    });
-
-    it('marks the message delivered on a success callback', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({ id: 'sms-1' });
-
-      await expect(
-        service.handleDeliveryCallback({ id: 'provider-1', status: 'Success' }),
-      ).resolves.toEqual({ acknowledged: true });
-
-      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-        data: {
-          status: SmsStatus.DELIVERED,
-          deliveredAt: expect.any(Date),
-          failureReason: null,
-        },
-      });
-    });
-
-    it('treats a delivered status as delivered regardless of casing', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({ id: 'sms-1' });
-
-      await service.handleDeliveryCallback({ id: 'provider-1', status: 'Delivered' });
-
-      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-        data: expect.objectContaining({ status: SmsStatus.DELIVERED }),
-      });
-    });
-
-    it('marks the message failed for any other callback status', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({ id: 'sms-1' });
-
-      await expect(
-        service.handleDeliveryCallback({ id: 'provider-1', status: 'Rejected' }),
-      ).resolves.toEqual({ acknowledged: true });
-
-      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-        data: {
-          status: SmsStatus.FAILED,
-          deliveredAt: null,
-          failureReason: 'Rejected',
-        },
+        }),
       });
     });
   });

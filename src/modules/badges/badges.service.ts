@@ -57,6 +57,18 @@ export class BadgesService {
       throw new NotFoundException('Badge not found');
     }
 
+    if (
+      input.requirementType !== undefined &&
+      input.requirementType !== badge.requirementType
+    ) {
+      const earnedCount = await this.prisma.studentBadge.count({ where: { badgeId: id } });
+      if (earnedCount > 0) {
+        throw new BadRequestException(
+          'Cannot change requirementType of a badge that has already been earned by students',
+        );
+      }
+    }
+
     return this.prisma.badge.update({ where: { id }, data: input });
   }
 

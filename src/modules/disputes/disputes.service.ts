@@ -173,8 +173,9 @@ export class DisputesService {
   // ----------------------------------------------------------
 
   /**
-   * Ensures the referenced enrollment or payment belongs to the student
-   * before allowing them to file a dispute.
+   * Ensures the referenced record belongs to the student before allowing
+   * them to file a dispute. Every DisputeReferenceType value must have an
+   * ownership check here — this is the only guard on the student write path.
    */
   private async validateReference(
     studentId: string,
@@ -205,6 +206,20 @@ export class DisputesService {
         );
       }
       return enrollment;
+    }
+
+    // ASSIGNMENT — referenceId is an assignment id
+    if (referenceType === DisputeReferenceType.ASSIGNMENT) {
+      const assignment = await this.prisma.assignment.findUnique({
+        where: { id: referenceId },
+      });
+      if (!assignment) {
+        throw new NotFoundException(`Assignment ${referenceId} not found`);
+      }
+      if (assignment.studentId !== studentId) {
+        throw new ForbiddenException('You can only dispute your own assignments');
+      }
+      return assignment;
     }
 
     throw new BadRequestException('Invalid reference type');

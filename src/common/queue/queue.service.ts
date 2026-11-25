@@ -1,226 +1,102 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Job, JobsOptions, Queue } from 'bullmq';
-import { plainToInstance } from 'class-transformer';
-import { IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength, validateSync } from 'class-validator';
-import { NotificationType } from '@prisma/client';
-import { NOTIFICATION_EMAIL_JOB, NOTIFICATION_EMAIL_QUEUE } from './queue.constants';
-
-export class NotificationEmailJobData {
-  @IsString()
-  @IsNotEmpty()
-  userId: string;
-
-  @IsString()
-  @IsNotEmpty()
-  notificationId: string;
-
-  @IsEmail()
-  to: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(300)
-  subject: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(10000)
-  text: string;
-
-  @IsEnum(NotificationType)
-  type: NotificationType;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  correlationId?: string;
-}
+import { Job, Queue } from 'bullmq';
+import {
+  CERTIFICATE_PDF_QUEUE,
+  NOTIFICATION_EMAIL_QUEUE,
+  VIDEO_PROCESSING_QUEUE,
+} from './queue.constants';
 
 export interface QueueJobStatus {
   id: string;
-  queue: string;
-  status: string;
-  progress: number | object;
-  attemptsMade: number;
-  result: unknown;
-  failedReason?: string;
-}
-
-export interface QueueMetrics {
-  queue: string;
-  active: number;
-  waiting: number;
-  delayed: number;
-  completed: number;
-  failed: number;
-  paused: number;
-  total: number;
-  failureRate: number;
-}
-
-export interface QueueMetricsReport {
-  generatedAt: string;
-  queues: QueueMetrics[];
-}
-
-export interface DeadLetterJob {
-  id: string;
-  queue: string;
   name: string;
+  state: string;
   attemptsMade: number;
   failedReason?: string;
-  failedAt?: string;
-  data: unknown;
+  timestamp?: number;
+  processedOn?: number;
+  finishedOn?: number;
 }
-
-/**
- * Explicit retry policy applied to every job added to the notification email
- * queue. Jobs are retried with exponential backoff and, once all attempts are
- * exhausted, remain in the queue's `failed` set as the dead-letter store.
- */
-export const NOTIFICATION_EMAIL_JOB_OPTIONS: JobsOptions = {
-  attempts: 5,
-  backoff: {
-    type: 'exponential',
-    delay: 5_000,
-  },
-  removeOnComplete: { age: 24 * 60 * 60, count: 1_000 },
-  removeOnFail: false,
-};
 
 @Injectable()
 export class QueueService {
+  private readonly logger = new Logger(QueueService.name);
+
   constructor(
     @InjectQueue(NOTIFICATION_EMAIL_QUEUE)
-    private readonly notificationEmailQueue: Queue<NotificationEmailJobData>,
+    private readonly notificationEmailQueue: Queue,
+    @InjectQueue(VIDEO_PROCESSING_QUEUE)
+    private readonly videoProcessingQueue: Queue,
+    @InjectQueue(CERTIFICATE_PDF_QUEUE)
+    private readonly certificatePdfQueue: Queue,
   ) {}
 
-  async enqueueNotificationEmail(payload: unknown, correlationId?: string) {
-    const data = plainToInstance(NotificationEmailJobData, payload);
-    const errors = validateSync(data, {
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      forbidUnknownValues: true,
-    });
-    if (errors.length) {
-      throw new BadRequestException('Invalid notification email job payload');
+  private getQueue(name: string): Queue {
+    switch (name) {
+      case NOTIFICATION_EMAIL_QUEUE:
+        return this.notificationEmailQueue;
+      case VIDEO_PROCESSING_QUEUE:
+        return this.videoProcessingQueue;
+      case CERTIFICATE_PDF_QUEUE:
+        return this.certificatePdfQueue;
+      default:
+        throw new NotFoundException(`Unknown queue: ${name}`);
     }
-
-    if (correlationId && !data.correlationId) {
-      data.correlationId = correlationId;
-    }
-
-    const job = await this.notificationEmailQueue.add(
-      NOTIFICATION_EMAIL_JOB,
-      data,
-      NOTIFICATION_EMAIL_JOB_OPTIONS,
-    );
-    return { id: job.id as string, status: await job.getState() };
   }
 
-  async getJobStatus(jobId: string, userId: string): Promise<QueueJobStatus> {
-    const job = await this.notificationEmailQueue.getJob(jobId);
+  async getJobStatus(queueName: string, jobId: string): Promise<QueueJobStatus> {
+    const queue = this.getQueue(queueName);
+    const job = await queue.getJob(jobId);
     if (!job) {
-      throw new NotFoundException('Job not found');
+      throw new NotFoundException(`Job ${jobId} not found in queue ${queueName}`);
     }
-
-    if (job.data.userId !== userId) {
-      throw new NotFoundException('Job not found');
-    }
-
-    return {
-      id: job.id as string,
-      queue: NOTIFICATION_EMAIL_QUEUE,
-      status: await job.getState(),
-      progress: job.progress as any,
-      attemptsMade: job.attemptsMade,
-      result: job.returnvalue,
-      failedReason: job.failedReason,
-    };
+    return this.toStatus(job, await job.getState());
   }
 
-  async getQueueMetrics(): Promise<QueueMetricsReport> {
-    const queues = [this.notificationEmailQueue];
-    const metrics = await Promise.all(
-      queues.map((queue) => this.collectQueueMetrics(queue)),
-    );
-
-    return {
-      generatedAt: new Date().toISOString(),
-      queues: metrics,
-    };
+  async listFailedJobs(queueName: string, limit = 50): Promise<QueueJobStatus[]> {
+    const queue = this.getQueue(queueName);
+    const jobs = await queue.getFailed(0, limit - 1);
+    return Promise.all(jobs.map(async (job) => this.toStatus(job, 'failed')));
   }
 
-  async listDeadLetterJobs(limit = 50): Promise<DeadLetterJob[]> {
-    const jobs = await this.notificationEmailQueue.getFailed(0, limit - 1);
-    return jobs.map((job) => this.toDeadLetterJob(job));
-  }
-
-  async requeueDeadLetterJob(jobId: string): Promise<QueueJobStatus> {
-    const job = await this.notificationEmailQueue.getJob(jobId);
+  async requeueDeadLetterJob(queueName: string, jobId: string): Promise<QueueJobStatus> {
+    const queue = this.getQueue(queueName);
+    const job = await queue.getJob(jobId);
     if (!job) {
-      throw new NotFoundException('Job not found');
+      throw new NotFoundException(`Job ${jobId} not found in queue ${queueName}`);
     }
 
     const state = await job.getState();
     if (state !== 'failed') {
-      throw new BadRequestException('Only failed jobs can be requeued');
+      throw new NotFoundException(`Job ${jobId} is not in the failed (dead-letter) set`);
     }
 
+    // BullMQ's retry() moves the job back to waiting but preserves attemptsMade,
+    // so an exhausted job would fail again immediately. Reset the attempt
+    // counter first so the job gets a fresh retry budget.
+    await job.updateData(job.data);
+    job.attemptsMade = 0;
     await job.retry('failed');
 
-    return {
-      id: job.id as string,
-      queue: NOTIFICATION_EMAIL_QUEUE,
-      status: await job.getState(),
-      progress: job.progress as any,
-      attemptsMade: job.attemptsMade,
-      result: job.returnvalue,
-      failedReason: job.failedReason,
-    };
+    this.logger.log(`Requeued dead-letter job ${jobId} from queue ${queueName}`);
+
+    const refreshed = await queue.getJob(jobId);
+    if (!refreshed) {
+      throw new NotFoundException(`Job ${jobId} not found in queue ${queueName}`);
+    }
+    return this.toStatus(refreshed, await refreshed.getState());
   }
 
-  private toDeadLetterJob(job: Job<NotificationEmailJobData>): DeadLetterJob {
+  private toStatus(job: Job, state: string): QueueJobStatus {
     return {
-      id: job.id as string,
-      queue: NOTIFICATION_EMAIL_QUEUE,
+      id: String(job.id),
       name: job.name,
+      state,
       attemptsMade: job.attemptsMade,
       failedReason: job.failedReason,
-      failedAt: job.finishedOn ? new Date(job.finishedOn).toISOString() : undefined,
-      data: job.data,
-    };
-  }
-
-  private async collectQueueMetrics(queue: Queue): Promise<QueueMetrics> {
-    const counts = await queue.getJobCounts(
-      'active',
-      'waiting',
-      'delayed',
-      'completed',
-      'failed',
-      'paused',
-    );
-
-    const active = counts.active ?? 0;
-    const waiting = counts.waiting ?? 0;
-    const delayed = counts.delayed ?? 0;
-    const completed = counts.completed ?? 0;
-    const failed = counts.failed ?? 0;
-    const paused = counts.paused ?? 0;
-    const total = active + waiting + delayed + completed + failed + paused;
-
-    return {
-      queue: queue.name,
-      active,
-      waiting,
-      delayed,
-      completed,
-      failed,
-      paused,
-      total,
-      failureRate: total > 0 ? failed / total : 0,
+      timestamp: job.timestamp,
+      processedOn: job.processedOn,
+      finishedOn: job.finishedOn,
     };
   }
 }

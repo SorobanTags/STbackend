@@ -72,12 +72,12 @@ export class SmsService {
       throw new BadRequestException(`Unsupported country code: ${countryCode}`);
     }
 
-    const trimmed = phoneNumber?.trim();
-    if (!trimmed || !pattern.test(trimmed)) {
+    const normalized = phoneNumber?.trim().replace(/[\s\-()]/g, '');
+    if (!normalized || !pattern.test(normalized)) {
       throw new BadRequestException(`Invalid phone number format for country ${country}`);
     }
 
-    return this.toE164(trimmed, country);
+    return this.toE164(normalized, country);
   }
 
   renderTemplate(templateKey: SmsTemplateKey, data: Record<string, string | number> = {}): string {

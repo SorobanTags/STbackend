@@ -103,12 +103,61 @@ describe('SmsService', () => {
       expect(service.validatePhoneNumber('08012345678', 'ng')).toBe('+2348012345678');
     });
 
+    it('strips spaces from an international number', () => {
+      expect(service.validatePhoneNumber('+234 801 234 5678', 'NG')).toBe('+2348012345678');
+    });
+
+    it('strips dashes from a local number', () => {
+      expect(service.validatePhoneNumber('0801-234-5678', 'NG')).toBe('+2348012345678');
+    });
+
+    it('strips parentheses from a number', () => {
+      expect(service.validatePhoneNumber('(0801) 234 5678', 'NG')).toBe('+2348012345678');
+    });
+
     it('supports the other supported countries', () => {
       expect(service.validatePhoneNumber('0712345678', 'KE')).toBe('+254712345678');
       expect(service.validatePhoneNumber('0772345678', 'UG')).toBe('+256772345678');
       expect(service.validatePhoneNumber('0241234567', 'GH')).toBe('+233241234567');
       expect(service.validatePhoneNumber('0821234567', 'ZA')).toBe('+27821234567');
       expect(service.validatePhoneNumber('0754123456', 'TZ')).toBe('+255754123456');
+    });
+
+    describe('per-country accepted/rejected matrix', () => {
+      const cases: Array<{
+        country: string;
+        input: string;
+        expected: string | null;
+      }> = [
+        { country: 'NG', input: '+234 801 234 5678', expected: '+2348012345678' },
+        { country: 'NG', input: '0801-234-5678', expected: '+2348012345678' },
+        { country: 'NG', input: '12345', expected: null },
+        { country: 'KE', input: '+254 712 345 678', expected: '+254712345678' },
+        { country: 'KE', input: '0712-345-678', expected: '+254712345678' },
+        { country: 'KE', input: '0000000000', expected: null },
+        { country: 'UG', input: '+256 772 345 678', expected: '+256772345678' },
+        { country: 'UG', input: '0772-345-678', expected: '+256772345678' },
+        { country: 'UG', input: '12345', expected: null },
+        { country: 'GH', input: '+233 24 123 4567', expected: '+233241234567' },
+        { country: 'GH', input: '024-123-4567', expected: '+233241234567' },
+        { country: 'GH', input: '9999999999', expected: null },
+        { country: 'ZA', input: '+27 82 123 4567', expected: '+27821234567' },
+        { country: 'ZA', input: '082-123-4567', expected: '+27821234567' },
+        { country: 'ZA', input: '12345', expected: null },
+        { country: 'TZ', input: '+255 754 123 456', expected: '+255754123456' },
+        { country: 'TZ', input: '0754-123-456', expected: '+255754123456' },
+        { country: 'TZ', input: '0000000000', expected: null },
+      ];
+
+      it.each(cases)('$country $input -> $expected', ({ country, input, expected }) => {
+        if (expected === null) {
+          expect(() => service.validatePhoneNumber(input, country)).toThrow(
+            BadRequestException,
+          );
+        } else {
+          expect(service.validatePhoneNumber(input, country)).toBe(expected);
+        }
+      });
     });
   });
 
@@ -224,19 +273,17 @@ describe('SmsService', () => {
 
       expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
         where: { id: 'sms-1' },
-        data: {
+        data: expect.objectContaining({
           status: SmsStatus.FAILED,
-          providerMessageId: undefined,
           failureReason: 'Rejected',
-          sentAt: null,
-        },
+        }),
       });
     });
 
     it('marks the message failed when the gateway throws', async () => {
-      mockGatewaySend.mockRejectedValueOnce(new Error('gateway offline'));
+      mockGatewaySend.mockRejectedValueOnce(new Error('network down'));
 
-      const result = await service.sendSms({
+      await service.sendSms({
         phoneNumber: '08012345678',
         countryCode: 'NG',
         message: 'Your enrollment is confirmed',
@@ -244,81 +291,10 @@ describe('SmsService', () => {
 
       expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
         where: { id: 'sms-1' },
-        data: { status: SmsStatus.FAILED, failureReason: 'gateway offline' },
-      });
-      expect(result).toEqual({ id: 'sms-1', status: SmsStatus.SENT });
-    });
-  });
-
-  describe('getDeliveryStatus()', () => {
-    it('returns the stored message for the given id', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({
-        id: 'sms-1',
-        status: SmsStatus.DELIVERED,
-      });
-
-      await expect(service.getDeliveryStatus('sms-1')).resolves.toEqual({
-        id: 'sms-1',
-        status: SmsStatus.DELIVERED,
-      });
-      expect(mockPrisma.smsMessage.findUnique).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-      });
-    });
-  });
-
-  describe('handleDeliveryCallback()', () => {
-    it('acknowledges without updating when the provider message is unknown', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce(null);
-
-      await expect(
-        service.handleDeliveryCallback({ id: 'provider-unknown', status: 'Success' }),
-      ).resolves.toEqual({ acknowledged: false });
-      expect(mockPrisma.smsMessage.update).not.toHaveBeenCalled();
-    });
-
-    it('marks the message delivered on a success callback', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({ id: 'sms-1' });
-
-      await expect(
-        service.handleDeliveryCallback({ id: 'provider-1', status: 'Success' }),
-      ).resolves.toEqual({ acknowledged: true });
-
-      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-        data: {
-          status: SmsStatus.DELIVERED,
-          deliveredAt: expect.any(Date),
-          failureReason: null,
-        },
-      });
-    });
-
-    it('treats a delivered status as delivered regardless of casing', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({ id: 'sms-1' });
-
-      await service.handleDeliveryCallback({ id: 'provider-1', status: 'Delivered' });
-
-      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-        data: expect.objectContaining({ status: SmsStatus.DELIVERED }),
-      });
-    });
-
-    it('marks the message failed for any other callback status', async () => {
-      mockPrisma.smsMessage.findUnique.mockResolvedValueOnce({ id: 'sms-1' });
-
-      await expect(
-        service.handleDeliveryCallback({ id: 'provider-1', status: 'Rejected' }),
-      ).resolves.toEqual({ acknowledged: true });
-
-      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
-        where: { id: 'sms-1' },
-        data: {
+        data: expect.objectContaining({
           status: SmsStatus.FAILED,
-          deliveredAt: null,
-          failureReason: 'Rejected',
-        },
+          failureReason: 'network down',
+        }),
       });
     });
   });

@@ -18,12 +18,9 @@ import { RefreshTokenService } from './refresh-token.service';
 import { SessionsController } from './sessions.controller';
 import { SessionsService } from './sessions.service';
 
-import { ThrottlerModule } from '@nestjs/throttler';
-
 @Module({
   imports: [
     PassportModule,
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

@@ -21,30 +21,67 @@ describe('SearchService', () => {
     service = moduleRef.get(SearchService);
   });
 
-  it('rejects queries shorter than the minimum length', async () => {
-    await expect(service.autocomplete('a')).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.courseSearchTerm.upsert).not.toHaveBeenCalled();
+  describe('autocomplete()', () => {
+    it('returns empty result for empty query without throwing', async () => {
+      const result = await service.autocomplete('');
+      expect(result.data).toEqual([]);
+      expect(result.meta.total).toBe(0);
+      expect(prisma.courseSearchTerm.upsert).not.toHaveBeenCalled();
+    });
+
+    it('returns empty result for one-character query without throwing', async () => {
+      const result = await service.autocomplete('a');
+      expect(result.data).toEqual([]);
+      expect(result.meta.total).toBe(0);
+      expect(prisma.courseSearchTerm.upsert).not.toHaveBeenCalled();
+    });
+
+    it('returns suggestions for query at minimum length', async () => {
+      prisma.courseSearchTerm.findMany.mockResolvedValue([]);
+      prisma.course.findMany.mockResolvedValue([
+        { id: 'course-1', title: 'AB Course', category: 'Science', totalEnrollments: 5, avgRating: 4.0 },
+      ]);
+
+      const result = await service.autocomplete('ab');
+      expect(result.data.length).toBeGreaterThan(0);
+      expect(prisma.courseSearchTerm.upsert).not.toHaveBeenCalled();
+    });
+
+    it('does not call courseSearchTerm.upsert for valid queries', async () => {
+      prisma.courseSearchTerm.findMany.mockResolvedValue([{ term: 'baking', searchCount: 7 }]);
+      prisma.course.findMany.mockResolvedValue([
+        { id: 'course-1', title: 'Baking Basics', category: 'Baking', totalEnrollments: 15, avgRating: 4.8 },
+        { id: 'course-2', title: 'Advanced Cake Baking', category: 'Culinary', totalEnrollments: 3, avgRating: 4.5 },
+      ]);
+
+      const result = await service.autocomplete('  Ba  ', 2);
+
+      expect(prisma.courseSearchTerm.upsert).not.toHaveBeenCalled();
+      expect(prisma.course.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 4 }));
+      expect(result.data).toHaveLength(2);
+      expect(result.data[0]).toMatchObject({ text: 'Baking Basics', type: 'course', courseId: 'course-1' });
+      expect(result.meta).toMatchObject({ query: 'ba', limit: 2, minQueryLength: 2, total: 2 });
+    });
   });
 
-  it('tracks valid search terms and returns ranked, limited suggestions', async () => {
-    prisma.courseSearchTerm.upsert.mockResolvedValue(undefined);
-    prisma.courseSearchTerm.findMany.mockResolvedValue([{ term: 'baking', searchCount: 7 }]);
-    prisma.course.findMany.mockResolvedValue([
-      { id: 'course-1', title: 'Baking Basics', category: 'Baking', totalEnrollments: 15, avgRating: 4.8 },
-      { id: 'course-2', title: 'Advanced Cake Baking', category: 'Culinary', totalEnrollments: 3, avgRating: 4.5 },
-    ]);
+  describe('recordSearchTerm()', () => {
+    it('calls upsert once with the normalised term', async () => {
+      prisma.courseSearchTerm.upsert.mockResolvedValue(undefined);
 
-    const result = await service.autocomplete('  Ba  ', 2);
+      await service.recordSearchTerm('  Baking  ');
 
-    expect(prisma.courseSearchTerm.upsert).toHaveBeenCalledWith({
-      where: { term: 'ba' },
-      create: { term: 'ba', searchCount: 1 },
-      update: { searchCount: { increment: 1 }, lastSearchedAt: expect.any(Date) },
+      expect(prisma.courseSearchTerm.upsert).toHaveBeenCalledTimes(1);
+      expect(prisma.courseSearchTerm.upsert).toHaveBeenCalledWith({
+        where: { term: 'baking' },
+        create: { term: 'baking', searchCount: 1 },
+        update: { searchCount: { increment: 1 }, lastSearchedAt: expect.any(Date) },
+      });
     });
-    expect(prisma.course.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 4 }));
-    expect(result.data).toHaveLength(2);
-    expect(result.data[0]).toMatchObject({ text: 'Baking Basics', type: 'course', courseId: 'course-1' });
-    expect(result.meta).toMatchObject({ query: 'ba', limit: 2, minQueryLength: 2, total: 2 });
+
+    it('does not call upsert for terms shorter than minimum length', async () => {
+      await service.recordSearchTerm('a');
+      expect(prisma.courseSearchTerm.upsert).not.toHaveBeenCalled();
+    });
   });
 
   // Issue #32: course.findMany must include a deterministic orderBy

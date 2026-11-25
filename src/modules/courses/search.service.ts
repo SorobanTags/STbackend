@@ -21,12 +21,11 @@ export class SearchService {
 
   async autocomplete(query: string, requestedLimit?: number) {
     const normalizedQuery = this.normalizeQuery(query);
-    if (normalizedQuery.length < this.minQueryLength) {
-      throw new BadRequestException(`Search query must be at least ${this.minQueryLength} characters long`);
-    }
-
     const limit = this.normalizeLimit(requestedLimit);
-    await this.trackSearchTerm(normalizedQuery);
+
+    if (normalizedQuery.length < this.minQueryLength) {
+      return { data: [], meta: { query: normalizedQuery, limit, minQueryLength: this.minQueryLength, total: 0 } };
+    }
 
     const [courses, popularTerms] = await Promise.all([
       this.prisma.course.findMany({
@@ -103,18 +102,20 @@ export class SearchService {
     };
   }
 
-  private async trackSearchTerm(term: string) {
+  async recordSearchTerm(term: string): Promise<void> {
+    const normalizedTerm = this.normalizeQuery(term);
+    if (normalizedTerm.length < this.minQueryLength) return;
     try {
       await (this.prisma as any).courseSearchTerm.upsert({
-        where: { term },
-        create: { term, searchCount: 1 },
+        where: { term: normalizedTerm },
+        create: { term: normalizedTerm, searchCount: 1 },
         update: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-        this.logger.debug(`trackSearchTerm P2002 race for term "${term}", falling back to update`);
+        this.logger.debug(`recordSearchTerm P2002 race for term "${normalizedTerm}", falling back to update`);
         await (this.prisma as any).courseSearchTerm.update({
-          where: { term },
+          where: { term: normalizedTerm },
           data: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
         });
       } else {
@@ -146,8 +147,8 @@ export class SearchService {
   }
 
   private normalizeLimit(limit?: number) {
-    const numericLimit = Number(limit) || this.defaultLimit;
-    return Math.min(Math.max(Math.floor(numericLimit), 1), this.maxLimit);
+    // limit is already validated by AutocompleteQueryDto; fall back to default if absent.
+    return limit ?? this.defaultLimit;
   }
 
   private rankText(text: string, query: string, baseScore: number) {

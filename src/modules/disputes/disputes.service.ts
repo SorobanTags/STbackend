@@ -1,6 +1,6 @@
 import {
   Injectable, NotFoundException, ForbiddenException,
-  BadRequestException, Logger,
+  BadRequestException, ConflictException, Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -115,10 +115,16 @@ export class DisputesService {
       throw new BadRequestException('Only OPEN disputes can be moved to UNDER_REVIEW');
     }
 
-    return this.prisma.dispute.update({
-      where: { id },
+    // Conditional on the observed status so a concurrent admin action loses instead of overwriting
+    const { count } = await this.prisma.dispute.updateMany({
+      where: { id, status: dispute.status },
       data: { status: DisputeStatus.UNDER_REVIEW },
     });
+    if (count === 0) {
+      throw new ConflictException('Dispute was modified concurrently; reload and retry');
+    }
+
+    return this.findOne(id);
   }
 
   // ----------------------------------------------------------
@@ -135,8 +141,9 @@ export class DisputesService {
       );
     }
 
-    const updated = await this.prisma.dispute.update({
-      where: { id },
+    // Conditional on the observed status so a concurrent admin action loses instead of overwriting
+    const { count } = await this.prisma.dispute.updateMany({
+      where: { id, status: dispute.status },
       data: {
         status: dto.status,
         adminNotes: dto.adminNotes,
@@ -144,6 +151,11 @@ export class DisputesService {
         resolvedAt: new Date(),
       },
     });
+    if (count === 0) {
+      throw new ConflictException('Dispute was modified concurrently; reload and retry');
+    }
+
+    const updated = await this.findOne(id);
 
     await this.notifications.notifyUser(
       dispute.filedById,

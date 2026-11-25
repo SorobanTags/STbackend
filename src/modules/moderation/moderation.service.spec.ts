@@ -182,6 +182,15 @@ describe('ModerationService', () => {
 
       expect(result.status).toBe(ReportStatus.RESOLVED);
       expect(result.resolvedById).toBe('admin-1');
+      expect(mockPrisma.abuseReport.update).toHaveBeenCalledWith({
+        where: { id: 'flag-1' },
+        data: {
+          status: ReportStatus.RESOLVED,
+          resolvedById: 'admin-1',
+          resolutionNote: 'Content reviewed and action taken',
+          resolvedAt: expect.any(Date),
+        },
+      });
     });
 
     it('throws NotFoundException if flag does not exist', async () => {
@@ -192,6 +201,51 @@ describe('ModerationService', () => {
           status: ReportStatus.DISMISSED,
         }),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ConflictException when the flag is already resolved', async () => {
+      mockPrisma.abuseReport.findUnique.mockResolvedValue({
+        id: 'flag-1',
+        status: ReportStatus.RESOLVED,
+      });
+
+      await expect(
+        service.resolveFlag('flag-1', 'admin-1', {
+          status: ReportStatus.DISMISSED,
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(mockPrisma.abuseReport.update).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException when the flag is already dismissed', async () => {
+      mockPrisma.abuseReport.findUnique.mockResolvedValue({
+        id: 'flag-1',
+        status: ReportStatus.DISMISSED,
+      });
+
+      await expect(
+        service.resolveFlag('flag-1', 'admin-1', {
+          status: ReportStatus.RESOLVED,
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(mockPrisma.abuseReport.update).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when dto.status is not a terminal status', async () => {
+      mockPrisma.abuseReport.findUnique.mockResolvedValue({
+        id: 'flag-1',
+        status: ReportStatus.PENDING,
+      });
+
+      await expect(
+        service.resolveFlag('flag-1', 'admin-1', {
+          status: ReportStatus.UNDER_REVIEW,
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockPrisma.abuseReport.update).not.toHaveBeenCalled();
     });
   });
 });

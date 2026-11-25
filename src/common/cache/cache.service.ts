@@ -1,113 +1,86 @@
-// cache.service.ts — issue #92: Redis-backed API response caching
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
+import { REDIS_CLIENT } from './cache.constants';
 
-const DEFAULT_TTL_SECONDS = 60;
+export interface CacheStats {
+  hits: number;
+  misses: number;
+  hitRate: number;
+  /**
+   * Scope of the reported numbers. `instance` means the counters are
+   * process-local and reset on restart; `cluster` means they are shared
+   * across replicas via Redis.
+   */
+  scope: 'instance' | 'cluster';
+}
 
 @Injectable()
-export class CacheService implements OnModuleDestroy {
+export class CacheService {
   private readonly logger = new Logger(CacheService.name);
-  private readonly redis: Redis;
-  private readonly defaultTtlSeconds: number;
-
   private hits = 0;
   private misses = 0;
 
-  constructor(private readonly config: ConfigService) {
-    const redisUrl = this.config.get<string>('REDIS_URL');
-    this.redis = redisUrl
-      ? new Redis(redisUrl, { lazyConnect: false, maxRetriesPerRequest: 2 })
-      : new Redis({
-          host: this.config.get<string>('REDIS_HOST', 'localhost'),
-          port: this.config.get<number>('REDIS_PORT', 6379),
-          password: this.config.get<string>('REDIS_PASSWORD') || undefined,
-          maxRetriesPerRequest: 2,
-        });
+  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
-    this.redis.on('error', (err) => {
-      this.logger.warn(`Redis connection error: ${err.message}`);
-    });
-
-    this.defaultTtlSeconds = this.config.get<number>('CACHE_TTL_SECONDS', DEFAULT_TTL_SECONDS);
-  }
-
-  async onModuleDestroy() {
-    await this.redis.quit().catch(() => undefined);
-  }
-
-  /**
-   * Deterministic cache key from a namespace and a set of query params.
-   * Params are sorted so equivalent queries in a different order share a key.
-   */
-  buildKey(namespace: string, params: Record<string, unknown> = {}): string {
-    const sortedEntries = Object.keys(params)
-      .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== '')
-      .sort()
-      .map((k) => `${k}=${String(params[k])}`);
-    return `cache:${namespace}${sortedEntries.length ? ':' + sortedEntries.join('&') : ''}`;
-  }
-
-  /**
-   * Round-trip Redis PING used by the aggregate /health check (issue #170).
-   * Rejects when the connection is down so the health aggregation fails the
-   * readiness probe. Returns the round-trip time in milliseconds.
-   */
-  async ping(): Promise<number> {
-    const startedAt = Date.now();
-    await this.redis.ping();
-    return Date.now() - startedAt;
-  }
-
-  async get<T = unknown>(key: string): Promise<T | null> {
+  async get<T>(key: string): Promise<T | null> {
     try {
-      const raw = await this.redis.get(key);
-      if (raw === null) {
+      const value = await this.redis.get(key);
+      if (value === null || value === undefined) {
         this.misses += 1;
         return null;
       }
       this.hits += 1;
-      return JSON.parse(raw) as T;
-    } catch (err) {
-      this.logger.warn(`Cache read failed for "${key}": ${(err as Error).message}`);
+      return JSON.parse(value) as T;
+    } catch (error) {
       this.misses += 1;
+      this.logger.warn(`Cache read failed for key ${key}: ${(error as Error).message}`);
       return null;
     }
   }
 
-  async set(key: string, value: unknown, ttlSeconds: number = this.defaultTtlSeconds): Promise<void> {
+  async set(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
     try {
-      await this.redis.set(key, JSON.stringify(value), 'EX', ttlSeconds);
-    } catch (err) {
-      this.logger.warn(`Cache write failed for "${key}": ${(err as Error).message}`);
+      const payload = JSON.stringify(value);
+      if (ttlSeconds && ttlSeconds > 0) {
+        await this.redis.set(key, payload, 'EX', ttlSeconds);
+      } else {
+        await this.redis.set(key, payload);
+      }
+    } catch (error) {
+      this.logger.warn(`Cache write failed for key ${key}: ${(error as Error).message}`);
     }
   }
 
   async del(key: string): Promise<void> {
-    await this.redis.del(key).catch(() => undefined);
-  }
-
-  /** Invalidates every cached entry under a namespace, e.g. on content updates. */
-  async invalidateNamespace(namespace: string): Promise<void> {
-    const pattern = `cache:${namespace}*`;
     try {
-      let cursor = '0';
-      do {
-        const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
-        cursor = nextCursor;
-        if (keys.length) await this.redis.del(...keys);
-      } while (cursor !== '0');
-    } catch (err) {
-      this.logger.warn(`Cache invalidation failed for namespace "${namespace}": ${(err as Error).message}`);
+      await this.redis.del(key);
+    } catch (error) {
+      this.logger.warn(`Cache delete failed for key ${key}: ${(error as Error).message}`);
     }
   }
 
-  getStats() {
+  /**
+   * Returns cache hit/miss statistics.
+   *
+   * The counters are kept in-process and are therefore scoped to this
+   * instance (`scope: 'instance'`). They reset on restart and are not
+   * aggregated across replicas. Use `resetStats()` to zero them.
+   */
+  getStats(): CacheStats {
     const total = this.hits + this.misses;
     return {
       hits: this.hits,
       misses: this.misses,
-      hitRate: total > 0 ? this.hits / total : 0,
+      hitRate: total === 0 ? 0 : this.hits / total,
+      scope: 'instance',
     };
+  }
+
+  /**
+   * Resets the in-process hit/miss counters to zero.
+   */
+  resetStats(): void {
+    this.hits = 0;
+    this.misses = 0;
   }
 }

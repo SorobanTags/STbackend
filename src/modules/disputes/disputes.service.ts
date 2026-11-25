@@ -7,6 +7,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { DisputeStatus, DisputeReferenceType, NotificationType } from '@prisma/client';
 import { FileDisputeDto } from './dto/file-dispute.dto';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
+import { MAX_PAGE_SIZE } from '../../common/dto/pagination-query.dto';
 
 @Injectable()
 export class DisputesService {
@@ -53,6 +54,7 @@ export class DisputesService {
     limit = 20,
     status?: DisputeStatus,
   ) {
+    ({ page, limit } = this.normalisePagination(page, limit));
     const where: any = {};
     if (status) where.status = status;
 
@@ -88,6 +90,7 @@ export class DisputesService {
 
   /** Get disputes filed by the authenticated student */
   async findMyDisputes(studentId: string, page = 1, limit = 20) {
+    ({ page, limit } = this.normalisePagination(page, limit));
     const [disputes, total] = await this.prisma.$transaction([
       this.prisma.dispute.findMany({
         where: { filedById: studentId },
@@ -101,7 +104,7 @@ export class DisputesService {
       this.prisma.dispute.count({ where: { filedById: studentId } }),
     ]);
 
-    return { data: disputes, meta: { total, page, limit } };
+    return { data: disputes, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   // ----------------------------------------------------------
@@ -171,6 +174,19 @@ export class DisputesService {
   // ----------------------------------------------------------
   // HELPERS
   // ----------------------------------------------------------
+
+  /** Rejects bad page/limit before they reach Prisma (skip/take). */
+  private normalisePagination(page: number, limit: number) {
+    const p = Number(page);
+    const l = Number(limit);
+    if (!Number.isInteger(p) || p < 1) {
+      throw new BadRequestException('page must be an integer >= 1');
+    }
+    if (!Number.isInteger(l) || l < 1 || l > MAX_PAGE_SIZE) {
+      throw new BadRequestException(`limit must be an integer between 1 and ${MAX_PAGE_SIZE}`);
+    }
+    return { page: p, limit: l };
+  }
 
   /**
    * Ensures the referenced enrollment or payment belongs to the student

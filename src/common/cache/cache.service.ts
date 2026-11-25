@@ -83,6 +83,32 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Atomically increments a counter and applies a TTL on first creation.
+   * Used by rate limiters (e.g. OTP throttling) so the window is shared
+   * across instances and expires automatically instead of leaking memory.
+   * Returns the post-increment count and the remaining TTL in seconds.
+   */
+  async increment(key: string, ttlSeconds: number): Promise<{ count: number; ttlSeconds: number }> {
+    try {
+      const results = await this.redis
+        .multi()
+        .incr(key)
+        .ttl(key)
+        .exec();
+      const count = Number(results?.[0]?.[1] ?? 0);
+      let ttl = Number(results?.[1]?.[1] ?? -1);
+      if (ttl < 0) {
+        await this.redis.expire(key, ttlSeconds);
+        ttl = ttlSeconds;
+      }
+      return { count, ttlSeconds: ttl };
+    } catch (err) {
+      this.logger.warn(`Cache increment failed for "${key}": ${(err as Error).message}`);
+      return { count: 0, ttlSeconds };
+    }
+  }
+
   async del(key: string): Promise<void> {
     await this.redis.del(key).catch(() => undefined);
   }

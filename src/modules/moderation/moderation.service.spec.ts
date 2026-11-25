@@ -98,6 +98,39 @@ describe('ModerationService', () => {
       });
     });
 
+    it('surfaces a failed automatic unpublish instead of reporting success as false', async () => {
+      mockPrisma.abuseReport.findFirst.mockResolvedValue(null);
+      mockPrisma.abuseReport.create.mockResolvedValue({
+        id: 'flag-3',
+        reporterId: 'user-3',
+        targetType: ReportTargetType.COURSE,
+        targetId: 'course-1',
+        category: ReportCategory.HARASSMENT,
+        status: ReportStatus.PENDING,
+      });
+      mockPrisma.abuseReport.findMany.mockResolvedValue([
+        { reporterId: 'user-1' },
+        { reporterId: 'user-2' },
+        { reporterId: 'user-3' },
+      ]);
+      mockPrisma.course.findUnique.mockResolvedValue({
+        id: 'course-1',
+        status: CourseStatus.ACTIVE,
+      });
+      mockPrisma.course.update.mockRejectedValue(new Error('Prisma write failed'));
+
+      const result = await service.createFlag('user-3', {
+        targetType: ReportTargetType.COURSE,
+        targetId: 'course-1',
+        category: ReportCategory.HARASSMENT,
+      });
+
+      expect(result.pendingCount).toBe(3);
+      expect(result.autoActionTaken).toBe(false);
+      expect(result.autoActionAttempted).toBe(true);
+      expect(result.autoActionError).toBe('Prisma write failed');
+    });
+
     it('rejects duplicate pending flags from the same reporter for the same target', async () => {
       mockPrisma.abuseReport.findFirst.mockResolvedValue({
         id: 'existing-flag',

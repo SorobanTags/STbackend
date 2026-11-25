@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -21,8 +22,15 @@ const TERMINAL_REPORT_STATUSES: ReportStatus[] = [
   ReportStatus.DISMISSED,
 ];
 
+export interface AutoUnpublishResult {
+  attempted: boolean;
+  applied: boolean;
+}
+
 @Injectable()
 export class ModerationService {
+  private readonly logger = new Logger(ModerationService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async createFlag(reporterId: string, dto: CreateFlagDto) {
@@ -68,15 +76,18 @@ export class ModerationService {
 
     const pendingCount = reporters.length;
     let autoActionTaken = false;
+    let autoActionFailed = false;
 
     if (pendingCount >= AUTO_UNPUBLISH_THRESHOLD) {
-      autoActionTaken = await this.autoUnpublishTarget(
+      const result = await this.autoUnpublishTarget(
         dto.targetType,
         dto.targetId,
       );
+      autoActionTaken = result.applied;
+      autoActionFailed = result.attempted && !result.applied;
     }
 
-    return { report, pendingCount, autoActionTaken };
+    return { report, pendingCount, autoActionTaken, autoActionFailed };
   }
 
   async resolveFlag(flagId: string, adminId: string, dto: ResolveFlagDto) {
@@ -117,22 +128,31 @@ export class ModerationService {
   private async autoUnpublishTarget(
     targetType: ReportTargetType,
     targetId: string,
-  ): Promise<boolean> {
+  ): Promise<AutoUnpublishResult> {
     if (targetType === ReportTargetType.COURSE) {
       const course = await this.prisma.course.findUnique({
         where: { id: targetId },
       });
 
       if (!course || course.status !== CourseStatus.ACTIVE) {
-        return false;
+        return { attempted: false, applied: false };
       }
 
-      await this.prisma.course.update({
-        where: { id: targetId },
-        data: { status: CourseStatus.PAUSED },
-      });
+      try {
+        await this.prisma.course.update({
+          where: { id: targetId },
+          data: { status: CourseStatus.PAUSED },
+        });
 
-      return true;
+        return { attempted: true, applied: true };
+      } catch (err) {
+        this.logger.error(
+          `Failed to auto-unpublish course ${targetId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return { attempted: true, applied: false };
+      }
     }
 
     if (targetType === ReportTargetType.COMMENT) {
@@ -141,17 +161,26 @@ export class ModerationService {
       });
 
       if (!comment) {
-        return false;
+        return { attempted: false, applied: false };
       }
 
-      await this.prisma.discussionComment.update({
-        where: { id: targetId },
-        data: { isHidden: true },
-      });
+      try {
+        await this.prisma.discussionComment.update({
+          where: { id: targetId },
+          data: { isHidden: true },
+        });
 
-      return true;
+        return { attempted: true, applied: true };
+      } catch (err) {
+        this.logger.error(
+          `Failed to auto-hide comment ${targetId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return { attempted: true, applied: false };
+      }
     }
 
-    return false;
+    return { attempted: false, applied: false };
   }
 }

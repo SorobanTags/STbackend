@@ -1,9 +1,10 @@
 // logger.module.ts
-import { Module } from '@nestjs/common';
+import { Injectable, Module, NestMiddleware, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
+import { Request, Response, NextFunction } from 'express';
 
 const VALID_LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
@@ -37,6 +38,28 @@ export const correlationIdStorage = new AsyncLocalStorage<{ correlationId: strin
 /** Returns the correlation ID of the current request, if any. */
 export function getCorrelationId(): string | undefined {
   return correlationIdStorage.getStore()?.correlationId;
+}
+
+/**
+ * Runs each HTTP request inside the correlationIdStorage context so that
+ * getCorrelationId() returns the same ID that pino-http assigned as req.id.
+ *
+ * Must be applied after pino-http middleware (i.e. registered after
+ * PinoLoggerModule is initialised) so that req.id is already set by the time
+ * this middleware executes.
+ */
+@Injectable()
+export class CorrelationIdMiddleware implements NestMiddleware {
+  use(req: Request & { id?: string }, _res: Response, next: NextFunction): void {
+    // pino-http sets req.id via genReqId; fall back to the header in case the
+    // middleware somehow runs before pino-http (should not happen in practice).
+    const correlationId =
+      req.id ??
+      (req.headers['x-correlation-id'] as string | undefined) ??
+      randomUUID();
+
+    correlationIdStorage.run({ correlationId }, next);
+  }
 }
 
 function resolveLogLevel(config: ConfigService, nodeEnv: string): string {
@@ -75,9 +98,6 @@ function resolveLogLevel(config: ConfigService, nodeEnv: string): string {
               return correlationId;
             },
             customProps: (req: any) => ({ correlationId: req.id }),
-            // Run the rest of the request lifecycle inside the correlation-ID
-            // store so services/queue/Sentry can read it via getCorrelationId().
-            customLogLevel: undefined,
             redact: {
               paths: REDACTED_PATHS,
               censor: '[REDACTED]',
@@ -88,6 +108,15 @@ function resolveLogLevel(config: ConfigService, nodeEnv: string): string {
       },
     }),
   ],
-  exports: [PinoLoggerModule],
+  providers: [CorrelationIdMiddleware],
+  exports: [PinoLoggerModule, CorrelationIdMiddleware],
 })
-export class LoggerModule {}
+export class LoggerModule implements NestModule {
+  /**
+   * Register CorrelationIdMiddleware globally after pino-http so that
+   * getCorrelationId() is populated for the entire request lifecycle.
+   */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(CorrelationIdMiddleware).forRoutes('*');
+  }
+}

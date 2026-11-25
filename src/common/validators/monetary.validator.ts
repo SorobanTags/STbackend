@@ -14,7 +14,12 @@ export interface IsUsdcAmountOptions<T extends object = object> extends Validati
 export function isValidUsdcAmount(value: unknown, allowZero = false): value is number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false;
   if (allowZero && value === 0) return true;
-  return value > 0 && Number.isSafeInteger(value * USDC_SCALE);
+  if (value <= 0) return false;
+  // Reject values too large to represent exactly after scaling.
+  if (value > Number.MAX_SAFE_INTEGER / USDC_SCALE) return false;
+  const scaled = Math.round(value * USDC_SCALE);
+  // Verify the scaled value round-trips exactly (guards against precision loss).
+  return Number.isSafeInteger(scaled) && scaled / USDC_SCALE === value;
 }
 
 export function IsUsdcAmount<T extends object = object>(
@@ -57,7 +62,8 @@ export function IsFutureDate(validationOptions?: ValidationOptions) {
       options: validationOptions,
       validator: {
         validate(value: unknown) {
-          return value instanceof Date && Number.isFinite(value.getTime()) && value.getTime() > Date.now();
+          const date = value instanceof Date ? value : new Date(value as any);
+          return Number.isFinite(date.getTime()) && date.getTime() > Date.now();
         },
         defaultMessage() {
           return 'Date must be in the future';

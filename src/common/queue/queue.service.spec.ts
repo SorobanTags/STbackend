@@ -4,6 +4,7 @@ import { NOTIFICATION_EMAIL_JOB_OPTIONS, QueueService } from './queue.service';
 
 describe('QueueService', () => {
   const queue = {
+    name: 'notification-email',
     add: jest.fn(),
     getJob: jest.fn(),
   };
@@ -44,5 +45,21 @@ describe('QueueService', () => {
     queue.getJob.mockResolvedValue({ data: { userId: 'another-user' } });
 
     await expect(service.getJobStatus('job-1', 'user-1')).rejects.toThrow(NotFoundException);
+  });
+
+  describe('hasQueue', () => {
+    it('returns true for the registered notification email queue', () => {
+      expect(service.hasQueue('notification-email')).toBe(true);
+    });
+
+    it('returns false for an unknown queue name', () => {
+      expect(service.hasQueue('unknown-queue')).toBe(false);
+    });
+  });
+
+  describe('requeueDeadLetterJobByName', () => {
+    it('throws NotFoundException for an unregistered queue', async () => {
+      await expect(service.requeueDeadLetterJobByName('unknown-queue', 'job-1')).rejects.toThrow(NotFoundException);
+    });
   });
 });

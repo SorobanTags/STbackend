@@ -103,8 +103,10 @@ export class EventsService implements OnModuleInit {
 
   @Cron(CronExpression.EVERY_5_SECONDS)
   async pollEvents() {
+    let fetchSucceeded = false;
     try {
       const events = await this.stellar.fetchContractEvents(this.lastProcessedLedger);
+      fetchSucceeded = true;
 
       if (events.length) {
         this.logger.log(`Processing ${events.length} chain event(s)`);
@@ -115,11 +117,17 @@ export class EventsService implements OnModuleInit {
         }
       }
     } catch (error) {
-      this.logger.error('Event polling failed', error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error('Event polling failed', message);
     } finally {
-      // Persist progress even when a poll finds nothing — a checkpoint write
-      // failure is logged but never allowed to stop the poll loop.
       this.lastPolledAt = new Date();
+    }
+
+    // Only advance the persisted checkpoint when the fetch actually succeeded.
+    // A failed fetch must not move the checkpoint forward, otherwise events
+    // missed during the outage would be skipped on the next poll. A successful
+    // poll that found zero events still persists (to record lastPolledAt).
+    if (fetchSucceeded) {
       await this.persistCheckpoint();
     }
   }

@@ -17,6 +17,30 @@ describe('CdnService', () => {
     CDN_SIGNED_URL_TTL_SECONDS: 3600,
   };
 
+  const createConfiguredService = async (
+    overrides: Record<string, string | number | undefined> = {},
+  ): Promise<CdnService> => {
+    const values: Record<string, string | number | undefined> = {
+      ...configMap,
+      ...overrides,
+    };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CdnService,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string, defaultValue?: unknown) =>
+              values[key] !== undefined ? values[key] : defaultValue,
+            ),
+          },
+        },
+      ],
+    }).compile();
+
+    return module.get(CdnService);
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -35,6 +59,80 @@ describe('CdnService', () => {
     service = module.get(CdnService);
     jest.clearAllMocks();
     delete configMap.CDN_PURGE_URL;
+  });
+
+  describe('constructor configuration', () => {
+    it('requires an explicit signing secret in production', async () => {
+      await expect(
+        createConfiguredService({
+          NODE_ENV: 'production',
+          CDN_SIGNING_SECRET: undefined,
+        }),
+      ).rejects.toThrow('CDN_SIGNING_SECRET');
+    });
+
+    it('starts in production when a sufficiently long signing secret is provided', async () => {
+      await expect(
+        createConfiguredService({
+          NODE_ENV: 'production',
+          CDN_SIGNING_SECRET: 'a'.repeat(32),
+        }),
+      ).resolves.toBeInstanceOf(CdnService);
+    });
+
+    it('rejects a signing secret shorter than 32 characters in production', async () => {
+      await expect(
+        createConfiguredService({
+          NODE_ENV: 'production',
+          CDN_SIGNING_SECRET: 'too-short',
+        }),
+      ).rejects.toThrow('at least 32 characters');
+    });
+
+    it('allows the development signing secret when none is configured', async () => {
+      const developmentService = await createConfiguredService({
+        NODE_ENV: 'development',
+        CDN_SIGNING_SECRET: undefined,
+      });
+
+      const signedUrl = developmentService.generateCdnUrl('/private/file', {
+        visibility: 'private',
+      });
+      expect(developmentService.validateSignedUrl(signedUrl.cdnUrl).valid).toBe(
+        true,
+      );
+    });
+
+    it.each(['not-a-number', '-5'])(
+      'uses the 3600-second fallback for invalid TTL %s',
+      async (ttl) => {
+        const configuredService = await createConfiguredService({
+          CDN_SIGNED_URL_TTL_SECONDS: ttl,
+        });
+        const startedAt = Math.floor(Date.now() / 1000);
+        const signedUrl = configuredService.generateCdnUrl('/private/file', {
+          visibility: 'private',
+        });
+        const expiresAt = Number(new URL(signedUrl.cdnUrl).searchParams.get('expires'));
+
+        expect(expiresAt - startedAt).toBeGreaterThanOrEqual(3600);
+        expect(expiresAt - startedAt).toBeLessThanOrEqual(3601);
+      },
+    );
+
+    it('uses the 3600-second fallback when TTL is missing', async () => {
+      const configuredService = await createConfiguredService({
+        CDN_SIGNED_URL_TTL_SECONDS: undefined,
+      });
+      const startedAt = Math.floor(Date.now() / 1000);
+      const signedUrl = configuredService.generateCdnUrl('/private/file', {
+        visibility: 'private',
+      });
+      const expiresAt = Number(new URL(signedUrl.cdnUrl).searchParams.get('expires'));
+
+      expect(expiresAt - startedAt).toBeGreaterThanOrEqual(3600);
+      expect(expiresAt - startedAt).toBeLessThanOrEqual(3601);
+    });
   });
 
   describe('generateCdnUrl()', () => {

@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ScheduleModule } from '@nestjs/schedule';
 import { LessonsModule } from './lessons.module';
 import { LessonsService } from './lessons.service';
 import { DripScheduleService } from './drip-schedule.service';
@@ -11,12 +12,17 @@ const mockPrisma = {
   enrollment: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), count: jest.fn() },
   lessonProgress: { findUnique: jest.fn(), upsert: jest.fn() },
   dripSchedule: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
+  enrollmentLessonUnlock: { findMany: jest.fn(), upsert: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
+  course: { findUnique: jest.fn() },
+  courseDripConfig: { upsert: jest.fn() },
+  lessonDripConfig: { upsert: jest.fn() },
   $transaction: jest.fn(),
 };
 
 const mockNotificationsService = {
   sendNotification: jest.fn(),
   createNotification: jest.fn(),
+  notifyUser: jest.fn(),
 };
 
 const mockEnrollmentsService = {
@@ -29,7 +35,7 @@ describe('LessonsModule', () => {
 
   beforeAll(async () => {
     module = await Test.createTestingModule({
-      imports: [LessonsModule],
+      imports: [ScheduleModule.forRoot(), LessonsModule],
     })
       .overrideProvider(PrismaService)
       .useValue(mockPrisma)

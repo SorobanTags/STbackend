@@ -79,15 +79,7 @@ export class BackupsService {
       this.assertCourseAccess(course.instructorAddress, user);
     }
 
-    // Determine the next version number for this course
-    const latestBackup = await this.prisma.courseBackup.findFirst({
-      where: { courseId },
-      orderBy: { version: "desc" },
-      select: { version: true },
-    });
-    const nextVersion = latestBackup ? latestBackup.version + 1 : 1;
-
-    // Validate completeness of course structure and content
+    // Validate completeness of course structure and content (outside the retry loop — deterministic)
     const validationReport = this.validateCompleteness(course);
 
     // Transform database course model into restorable format matching RestoreCourseBackupDto
@@ -123,59 +115,103 @@ export class BackupsService {
       })),
     };
 
-    const unchecksummedPayload = {
-      formatVersion: "1.0.0",
-      courseBackupVersion: nextVersion,
-      courseId: course.id,
-      exportedAt: new Date().toISOString(),
-      isAutomatic,
-      requestedBy: user?.id ?? null,
-      course: coursePayload,
-      validationReport,
-    };
+    // Wrap version allocation and insert in a transaction; retry on unique-constraint
+    // violations (P2002 on courseId+version) up to MAX_VERSION_RETRIES times.
+    const MAX_VERSION_RETRIES = 5;
 
-    const serializedPayload = JSON.stringify(unchecksummedPayload);
-    const checksum = createHash("sha256")
-      .update(serializedPayload)
-      .digest("hex");
+    for (let attempt = 0; attempt < MAX_VERSION_RETRIES; attempt++) {
+      try {
+        const backup = await this.prisma.$transaction(async (tx) => {
+          // Determine the next version number for this course inside the transaction
+          const latestBackup = await tx.courseBackup.findFirst({
+            where: { courseId },
+            orderBy: { version: "desc" },
+            select: { version: true },
+          });
+          const nextVersion = latestBackup ? latestBackup.version + 1 : 1;
 
-    const fullPayload: CourseBackupExportPayload = {
-      ...unchecksummedPayload,
-      checksum,
-    };
+          const unchecksummedPayload = {
+            formatVersion: "1.0.0",
+            courseBackupVersion: nextVersion,
+            courseId: course.id,
+            exportedAt: new Date().toISOString(),
+            isAutomatic,
+            requestedBy: user?.id ?? null,
+            course: coursePayload,
+            validationReport,
+          };
 
-    const fileSizeBytes = Buffer.byteLength(
-      JSON.stringify(fullPayload),
-      "utf8",
-    );
+          const serializedPayload = JSON.stringify(unchecksummedPayload);
+          const checksum = createHash("sha256")
+            .update(serializedPayload)
+            .digest("hex");
 
-    try {
-      const backup = await this.prisma.courseBackup.create({
-        data: {
-          courseId,
-          version: nextVersion,
-          status: CourseBackupStatus.COMPLETED,
-          isAutomatic,
-          requestedBy: user?.id ?? null,
-          payload: fullPayload as unknown as Prisma.InputJsonValue,
-          fileSizeBytes,
-          checksum,
-          isComplete: validationReport.isComplete,
-          validationReport:
-            validationReport as unknown as Prisma.InputJsonValue,
-        },
-      });
+          const fullPayload: CourseBackupExportPayload = {
+            ...unchecksummedPayload,
+            checksum,
+          };
 
-      this.logger.log(
-        `Created backup for course ${courseId} (v${nextVersion}, size: ${fileSizeBytes} bytes, complete: ${validationReport.isComplete})`,
-      );
-      return backup;
-    } catch (error) {
-      this.logger.error(
-        `Failed to record backup for course ${courseId}: ${error?.message ?? error}`,
-      );
-      throw error;
+          const fileSizeBytes = Buffer.byteLength(
+            JSON.stringify(fullPayload),
+            "utf8",
+          );
+
+          const created = await tx.courseBackup.create({
+            data: {
+              courseId,
+              version: nextVersion,
+              status: CourseBackupStatus.COMPLETED,
+              isAutomatic,
+              requestedBy: user?.id ?? null,
+              payload: fullPayload as unknown as Prisma.InputJsonValue,
+              fileSizeBytes,
+              checksum,
+              isComplete: validationReport.isComplete,
+              validationReport:
+                validationReport as unknown as Prisma.InputJsonValue,
+            },
+          });
+
+          this.logger.log(
+            `Created backup for course ${courseId} (v${nextVersion}, size: ${fileSizeBytes} bytes, complete: ${validationReport.isComplete})`,
+          );
+          return created;
+        });
+
+        return backup;
+      } catch (error) {
+        const isUniqueViolation =
+          (error instanceof Prisma.PrismaClientKnownRequestError ||
+            (error as any)?.name === "PrismaClientKnownRequestError") &&
+          (error as any)?.code === "P2002";
+
+        if (isUniqueViolation && attempt < MAX_VERSION_RETRIES - 1) {
+          this.logger.warn(
+            `Version conflict (P2002) for course ${courseId} on attempt ${attempt + 1}; retrying...`,
+          );
+          continue;
+        }
+
+        if (isUniqueViolation) {
+          this.logger.error(
+            `Gave up allocating a backup version for course ${courseId} after ${MAX_VERSION_RETRIES} attempts`,
+          );
+          throw new BadRequestException(
+            `Could not allocate a unique backup version for course ${courseId} after ${MAX_VERSION_RETRIES} attempts`,
+          );
+        }
+
+        this.logger.error(
+          `Failed to record backup for course ${courseId}: ${error?.message ?? error}`,
+        );
+        throw error;
+      }
     }
+
+    // This line is unreachable but satisfies TypeScript's control-flow analysis.
+    throw new BadRequestException(
+      `Could not allocate a unique backup version for course ${courseId}`,
+    );
   }
 
   /**

@@ -47,6 +47,10 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
   private readonly indexName = 'courses';
   private readonly profanityFilter: Filter;
 
+  private indexReady = false;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly retryDelayMs = 30_000;
+
   /** Ranking-score weights applied to course documents at index time.
    *  Meilisearch uses these built-in ranking rules by default, but we
    *  configure dedicated attributes for relevance: title gets higher
@@ -125,18 +129,42 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
   // ---------------------------------------------------------------
 
   async onModuleInit() {
-    try {
-      await this.ensureIndex();
-      this.logger.log(`Meilisearch index "${this.indexName}" is ready`);
-    } catch (err) {
-      this.logger.error(
-        `Failed to initialise Meilisearch index: ${(err as Error).message}`,
-      );
-    }
+    await this.initialiseIndex();
   }
 
   async onModuleDestroy() {
-    // No explicit teardown needed; connection is HTTP-based.
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  /**
+   * Attempts to set up the Meilisearch index. On failure, leaves `indexReady`
+   * false and schedules a retry after `retryDelayMs`.
+   */
+  private async initialiseIndex(): Promise<void> {
+    try {
+      await this.ensureIndex();
+      this.indexReady = true;
+      this.logger.log(`Meilisearch index "${this.indexName}" is ready`);
+    } catch (err) {
+      this.indexReady = false;
+      this.logger.error(
+        `Failed to initialise Meilisearch index: ${(err as Error).message}. Retrying in ${this.retryDelayMs / 1000}s.`,
+      );
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        void this.initialiseIndex();
+      }, this.retryDelayMs);
+    }
+  }
+
+  /**
+   * Returns whether the Meilisearch index was successfully configured.
+   */
+  isIndexReady(): boolean {
+    return this.indexReady;
   }
 
   // ---------------------------------------------------------------
@@ -268,6 +296,13 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
       page = 1,
       limit = 20,
     } = params;
+
+    // ----------------------------------------------------------
+    // 0. Lazy index init if setup failed at boot
+    // ----------------------------------------------------------
+    if (!this.indexReady) {
+      await this.initialiseIndex();
+    }
 
     // ----------------------------------------------------------
     // 1. Sanitize: reject empty queries, filter profanity

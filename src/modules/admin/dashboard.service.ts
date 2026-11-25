@@ -2,10 +2,14 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { CacheService } from '../../common/cache/cache.service';
 import { DashboardQueryDto } from './dto/dashboard-query.dto';
 import { CourseStatus, EnrollmentStatus, UserRole } from '@prisma/client';
+import { parseOptionalDate, resolveDateRange } from '../reports/reports.common';
 
 const STALE_AFTER_MS = 30 * 60 * 1000; // matches the scheduled recalculation cadence
+const SUMMARY_CACHE_KEY = 'admin:dashboard:summary';
+const SUMMARY_CACHE_TTL_SECONDS = 35 * 60; // slightly longer than the cron cadence
 
 interface SummaryStats {
   users: { total: number; students: number; instructors: number; newInPeriod: number };
@@ -14,12 +18,19 @@ interface SummaryStats {
   revenue: { totalInPeriod: number; currency: string };
 }
 
+interface CachedSnapshot {
+  data: SummaryStats;
+  calculatedAt: string; // ISO string — survives JSON round-trip
+}
+
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
-  private cachedSummary: { data: SummaryStats; calculatedAt: Date } | null = null;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   async getSummary(query: DashboardQueryDto) {
     const { startDate, endDate } = query;
@@ -27,15 +38,25 @@ export class DashboardService {
 
     // No period given — serve the periodically recalculated all-time cache.
     if (!startDate && !endDate) {
-      if (!this.cachedSummary) {
-        await this.recalculate();
+      const snapshot = await this.cache.get<CachedSnapshot>(SUMMARY_CACHE_KEY);
+      if (snapshot) {
+        const calculatedAt = new Date(snapshot.calculatedAt);
+        return {
+          ...snapshot.data,
+          meta: {
+            calculatedAt,
+            isStale: Date.now() - calculatedAt.getTime() > STALE_AFTER_MS,
+            source: 'cache' as const,
+          },
+        };
       }
-      const { data, calculatedAt } = this.cachedSummary!;
+      // No snapshot yet — compute live and cache it.
+      const { data, calculatedAt } = await this.recalculate();
       return {
         ...data,
         meta: {
           calculatedAt,
-          isStale: Date.now() - calculatedAt.getTime() > STALE_AFTER_MS,
+          isStale: false,
           source: 'cache' as const,
         },
       };
@@ -58,8 +79,10 @@ export class DashboardService {
 
   private async recalculate() {
     const data = await this.computeSummary();
-    this.cachedSummary = { data, calculatedAt: new Date() };
-    return this.cachedSummary;
+    const calculatedAt = new Date();
+    const snapshot: CachedSnapshot = { data, calculatedAt: calculatedAt.toISOString() };
+    await this.cache.set(SUMMARY_CACHE_KEY, snapshot, SUMMARY_CACHE_TTL_SECONDS);
+    return { data, calculatedAt };
   }
 
   private validateDateRange(startDate?: string, endDate?: string): void {
@@ -68,16 +91,11 @@ export class DashboardService {
       throw new BadRequestException('Both startDate and endDate must be provided together');
     }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // Use shared helpers for parsing and ordering validation
+    const { endDate: end } = resolveDateRange({ startDate, endDate });
 
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      throw new BadRequestException('startDate and endDate must be valid ISO date strings');
-    }
-    if (start > end) {
-      throw new BadRequestException('startDate must be before or equal to endDate');
-    }
-    if (end.getTime() > Date.now()) {
+    const now = Date.now();
+    if (end && end.getTime() > now) {
       throw new BadRequestException('endDate cannot be in the future');
     }
   }

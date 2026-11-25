@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { isValidUsdcAmount } from '../../common/validators/monetary.validator';
 import { CreateBundleDto } from './dto/create-bundle.dto';
 import { EnrollBundleDto } from './dto/enroll-bundle.dto';
 
@@ -19,6 +20,10 @@ export class BundlesService {
   // ----------------------------------------------------------
 
   async create(instructorId: string, instructorAddress: string, dto: CreateBundleDto) {
+    if (!isValidUsdcAmount(dto.price)) {
+      throw new BadRequestException('Bundle price must be a valid USDC amount');
+    }
+
     const courses = await this.prisma.course.findMany({
       where: { id: { in: dto.courseIds } },
     });

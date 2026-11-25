@@ -90,4 +90,61 @@ describe('WebhookSignatureMiddleware', () => {
     expect(req._webhookSignatureSkipped).toBe(true);
     expect(next).toHaveBeenCalledTimes(1);
   });
+
+  describe('skip flag — @SkipWebhookSignature() opt-out', () => {
+    it('calls next() without verifying when _webhookSignatureSkipped is true', () => {
+      const req = createRequest() as Request & {
+        rawBody: Buffer;
+        _webhookSignatureSkipped?: boolean;
+      };
+      req._webhookSignatureSkipped = true;
+      const next = jest.fn() as NextFunction;
+
+      middleware.use(req, {} as Response, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT skip when _webhookSignatureSkipped is falsy', () => {
+      const req = createRequest() as Request & {
+        rawBody: Buffer;
+        _webhookSignatureSkipped?: boolean;
+      };
+      req._webhookSignatureSkipped = false;
+      const next = jest.fn() as NextFunction;
+
+      expect(() => middleware.use(req, {} as Response, next)).toThrow(
+        UnauthorizedException,
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('non-skipped routes', () => {
+    it('throws UnauthorizedException when no signature header is present', () => {
+      const req = createRequest();
+      expect(() => middleware.use(req, {} as Response, jest.fn())).toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('calls next() when signature is valid (sha256= prefix)', () => {
+      const body = Buffer.from('{"event":"test"}');
+      const req = createRequest('sha256=' + sign(body));
+      (req as Request & { rawBody: Buffer }).rawBody = body;
+      const next = jest.fn() as NextFunction;
+      middleware.use(req, {} as Response, next);
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws ForbiddenException when signature is invalid', () => {
+      const req = createRequest(
+        'sha256=deadbeef00000000000000000000000000000000000000000000000000000000',
+      );
+      expect(() => middleware.use(req, {} as Response, jest.fn())).toThrow(
+        ForbiddenException,
+      );
+    });
+  });
+  });
 });

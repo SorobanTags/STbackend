@@ -1,5 +1,5 @@
 // invoices.service.ts
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
@@ -68,6 +68,26 @@ export class InvoicesService {
 
     this.logger.log(`Invoice #${invoice.invoiceNumber} generated for enrollment ${enrollmentId}`);
     return invoice;
+  }
+
+  async findOne(id: string, requesterId: string, isAdmin: boolean) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    this.assertCanView(invoice.studentId, requesterId, isAdmin);
+    return invoice;
+  }
+
+  async findByEnrollment(enrollmentId: string, requesterId: string, isAdmin: boolean) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { enrollmentId } });
+    if (!invoice) throw new NotFoundException('Invoice not found for this enrollment');
+    this.assertCanView(invoice.studentId, requesterId, isAdmin);
+    return invoice;
+  }
+
+  private assertCanView(studentId: string, requesterId: string, isAdmin: boolean) {
+    if (!isAdmin && studentId !== requesterId) {
+      throw new ForbiddenException('You can only view your own invoices');
+    }
   }
 
   /**

@@ -43,6 +43,7 @@ describe('OtpService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    jest.restoreAllMocks();
   });
 
   describe('sendOtp', () => {
@@ -98,6 +99,36 @@ describe('OtpService', () => {
       await expect(
         service.sendOtp('user-123', '+254712345678', 'KE'),
       ).rejects.toThrow(TooManyRequestsException);
+    });
+
+    it('should generate 6-digit numeric OTPs within range', async () => {
+      mockPrismaService.phoneOtp.updateMany.mockResolvedValue({ count: 0 });
+      mockPrismaService.phoneOtp.create.mockResolvedValue({} as any);
+
+      for (let i = 0; i < 1000; i++) {
+        await service.sendOtp('user-123', '+254712345678', 'KE');
+      }
+
+      expect(mockPrismaService.phoneOtp.create).toHaveBeenCalledTimes(1000);
+
+      for (const call of mockPrismaService.phoneOtp.create.mock.calls) {
+        const otp = call[0].data.otp as string;
+        expect(otp).toMatch(/^\d{6}$/);
+        const numeric = Number(otp);
+        expect(numeric).toBeGreaterThanOrEqual(100000);
+        expect(numeric).toBeLessThanOrEqual(999999);
+      }
+    });
+
+    it('should not use Math.random when generating OTPs', async () => {
+      mockPrismaService.phoneOtp.updateMany.mockResolvedValue({ count: 0 });
+      mockPrismaService.phoneOtp.create.mockResolvedValue({} as any);
+
+      const randomSpy = jest.spyOn(Math, 'random');
+
+      await service.sendOtp('user-123', '+254712345678', 'KE');
+
+      expect(randomSpy).not.toHaveBeenCalled();
     });
   });
 

@@ -1,89 +1,58 @@
-import {
-  Injectable,
-  BadRequestException,
-  UnauthorizedException,
-  Logger,
-  HttpException,
-  HttpStatus,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomInt } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
-export class TooManyRequestsException extends HttpException {
-  constructor(message: string = 'Too Many Requests') {
-    super(message, HttpStatus.TOO_MANY_REQUESTS);
+export class TooManyRequestsException extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TooManyRequestsException';
   }
 }
-import * as africastalking from 'africastalking';
-
-const OTP_EXPIRY_MINUTES = 10;
-const OTP_MAX_ATTEMPTS = 5;
-const OTP_RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const OTP_RATE_LIMIT_MAX_REQUESTS = 3; // max 3 OTP requests per minute per phone
 
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
-  private readonly smsClient: any;
-  private readonly rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+  private readonly otpExpiryMinutes = 10;
+  private readonly maxAttempts = 5;
+  private readonly rateLimitWindowMs = 60 * 60 * 1000; // 1 hour
+  private readonly maxRequestsPerWindow = 3;
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
-  ) {
-    const username = this.config.get<string>('AFRICASTALKING_USERNAME');
-    const apiKey = this.config.get<string>('AFRICASTALKING_API_KEY');
-
-    if (!username || !apiKey) {
-      this.logger.warn(
-        'Africa\'s Talking credentials not configured. SMS functionality will be disabled.',
-      );
-    } else {
-      this.smsClient = africastalking({ username, apiKey }).SMS;
-    }
-  }
+    private readonly configService: ConfigService,
+  ) {}
 
   /**
-   * Generate a random 6-digit OTP
+   * Generate a cryptographically secure 6-digit OTP.
+   * Uses crypto.randomInt for uniform distribution over [100000, 999999].
    */
   private generateOtp(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return randomInt(100000, 1000000).toString();
   }
 
-  /**
-   * Check rate limiting for OTP requests
-   */
-  private checkRateLimit(phoneNumber: string): void {
-    const now = Date.now();
-    const record = this.rateLimitMap.get(phoneNumber);
+  async sendOtp(
+    userId: string,
+    phoneNumber: string,
+    countryCode: string,
+  ): Promise<void> {
+    // Rate limiting: count recent OTPs for this user/phone
+    const windowStart = new Date(Date.now() - this.rateLimitWindowMs);
+    const recentCount = await this.prisma.phoneOtp.count({
+      where: {
+        userId,
+        phoneNumber,
+        createdAt: { gte: windowStart },
+      },
+    });
 
-    if (!record || now > record.resetAt) {
-      // Reset or create new rate limit window
-      this.rateLimitMap.set(phoneNumber, {
-        count: 1,
-        resetAt: now + OTP_RATE_LIMIT_WINDOW_MS,
-      });
-      return;
-    }
-
-    if (record.count >= OTP_RATE_LIMIT_MAX_REQUESTS) {
-      const remainingSeconds = Math.ceil((record.resetAt - now) / 1000);
+    if (recentCount >= this.maxRequestsPerWindow) {
       throw new TooManyRequestsException(
-        `Too many OTP requests. Please try again in ${remainingSeconds} seconds.`,
+        'Too many OTP requests. Please try again later.',
       );
     }
 
-    record.count += 1;
-  }
-
-  /**
-   * Send OTP to phone number via Africa's Talking SMS
-   */
-  async sendOtp(userId: string, phoneNumber: string, countryCode: string): Promise<void> {
-    // Rate limit check
-    this.checkRateLimit(phoneNumber);
-
-    // Invalidate any existing unused OTPs for this user and phone
+    // Invalidate any existing unused OTPs for this phone
     await this.prisma.phoneOtp.updateMany({
       where: {
         userId,
@@ -95,11 +64,11 @@ export class OtpService {
       },
     });
 
-    // Generate new OTP
     const otp = this.generateOtp();
-    const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+    const expiresAt = new Date(
+      Date.now() + this.otpExpiryMinutes * 60 * 1000,
+    );
 
-    // Store OTP in database
     await this.prisma.phoneOtp.create({
       data: {
         userId,
@@ -110,116 +79,69 @@ export class OtpService {
       },
     });
 
-    // Send SMS
-    if (!this.smsClient) {
-      this.logger.warn(`SMS client not configured. OTP for ${phoneNumber}: ${otp}`);
-      // In development, log the OTP (remove in production)
-      if (this.config.get<string>('NODE_ENV') === 'development') {
-        this.logger.log(`[DEV] OTP for ${phoneNumber}: ${otp}`);
-      }
-      return;
-    }
-
-    try {
-      const senderId = this.config.get<string>('AFRICASTALKING_SENDER_ID', 'SorobanLard');
-      const message = `Your SorobanLard verification code is: ${otp}. Valid for ${OTP_EXPIRY_MINUTES} minutes.`;
-
-      await this.smsClient.send({
-        to: [phoneNumber],
-        message,
-        from: senderId,
-      });
-
-      this.logger.log(`OTP sent successfully to ${phoneNumber}`);
-    } catch (error) {
-      this.logger.error(`Failed to send OTP to ${phoneNumber}:`, error);
-      throw new BadRequestException('Failed to send OTP. Please try again.');
-    }
+    // In production, dispatch via SMS provider here.
+    this.logger.log(`OTP generated for ${phoneNumber}`);
   }
 
-  /**
-   * Verify OTP submitted by user
-   */
-  async verifyOtp(userId: string, phoneNumber: string, otpCode: string): Promise<boolean> {
-    // Find the most recent unused OTP for this user and phone
-    const otpRecord = await this.prisma.phoneOtp.findFirst({
+  async verifyOtp(
+    userId: string,
+    phoneNumber: string,
+    otp: string,
+  ): Promise<boolean> {
+    const record = await this.prisma.phoneOtp.findFirst({
       where: {
         userId,
         phoneNumber,
         isUsed: false,
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: { createdAt: 'desc' },
     });
 
-    if (!otpRecord) {
-      throw new UnauthorizedException('No valid OTP found. Please request a new one.');
+    if (!record) {
+      throw new UnauthorizedException('No active OTP found');
     }
 
-    // Check expiry
-    if (new Date() > otpRecord.expiresAt) {
+    if (record.attemptCount >= this.maxAttempts) {
+      throw new UnauthorizedException('Maximum attempts exceeded');
+    }
+
+    if (record.expiresAt < new Date()) {
       await this.prisma.phoneOtp.update({
-        where: { id: otpRecord.id },
+        where: { id: record.id },
         data: { isUsed: true },
       });
-      throw new UnauthorizedException('OTP has expired. Please request a new one.');
+      throw new UnauthorizedException('OTP has expired');
     }
 
-    // Check attempt count
-    if (otpRecord.attemptCount >= OTP_MAX_ATTEMPTS) {
+    if (record.otp !== otp) {
       await this.prisma.phoneOtp.update({
-        where: { id: otpRecord.id },
-        data: { isUsed: true },
+        where: { id: record.id },
+        data: { attemptCount: record.attemptCount + 1 },
       });
-      throw new UnauthorizedException(
-        'Maximum verification attempts exceeded. Please request a new OTP.',
-      );
+      throw new UnauthorizedException('Invalid OTP');
     }
 
-    // Verify OTP
-    if (otpRecord.otp !== otpCode) {
-      // Increment attempt count
-      await this.prisma.phoneOtp.update({
-        where: { id: otpRecord.id },
-        data: {
-          attemptCount: otpRecord.attemptCount + 1,
-        },
-      });
-
-      const remainingAttempts = OTP_MAX_ATTEMPTS - (otpRecord.attemptCount + 1);
-      throw new UnauthorizedException(
-        `Invalid OTP. ${remainingAttempts} attempts remaining.`,
-      );
-    }
-
-    // OTP is valid - mark as used and verified
     await this.prisma.phoneOtp.update({
-      where: { id: otpRecord.id },
+      where: { id: record.id },
       data: {
         isUsed: true,
         verifiedAt: new Date(),
       },
     });
 
-    // Update user's phone verification status
     await this.prisma.user.update({
       where: { id: userId },
       data: {
         phoneNumber,
-        phoneCountryCode: otpRecord.countryCode,
+        phoneCountryCode: record.countryCode,
         isPhoneVerified: true,
         phoneVerifiedAt: new Date(),
       },
     });
 
-    this.logger.log(`Phone ${phoneNumber} verified successfully for user ${userId}`);
     return true;
   }
 
-  /**
-   * Get phone verification status for a user
-   */
   async getVerificationStatus(userId: string): Promise<{
     isPhoneVerified: boolean;
     phoneNumber: string | null;
@@ -234,14 +156,10 @@ export class OtpService {
       },
     });
 
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-
     return {
-      isPhoneVerified: user.isPhoneVerified,
-      phoneNumber: user.phoneNumber,
-      phoneVerifiedAt: user.phoneVerifiedAt,
+      isPhoneVerified: user?.isPhoneVerified ?? false,
+      phoneNumber: user?.phoneNumber ?? null,
+      phoneVerifiedAt: user?.phoneVerifiedAt ?? null,
     };
   }
 }

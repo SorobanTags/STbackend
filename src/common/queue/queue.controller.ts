@@ -2,7 +2,6 @@ import {
   Controller,
   ForbiddenException,
   Get,
-  NotFoundException,
   Param,
   Post,
   UseGuards,
@@ -52,9 +51,6 @@ export class QueueController {
     @Param('queueName') queueName: string,
     @Param('id') jobId: string,
   ) {
-    if (queueName !== NOTIFICATION_EMAIL_QUEUE) {
-      throw new NotFoundException('Queue not found');
-    }
-    return this.queueService.requeueDeadLetterJob(jobId);
+    return this.queueService.requeueDeadLetterJobByName(queueName, jobId);
   }
 }

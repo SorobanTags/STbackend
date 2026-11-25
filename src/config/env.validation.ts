@@ -193,7 +193,7 @@ export class EnvironmentVariables {
   CDN_SIGNING_SECRET?: string;
 
   @IsOptional()
-  @Matches(/^\d+$/, { message: 'CDN_SIGNED_URL_TTL_SECONDS must be numeric' })
+  @IsString()
   CDN_SIGNED_URL_TTL_SECONDS?: string;
 
   // ----------------------------------------------------------

@@ -125,6 +125,29 @@ describe('EventsService — ledger checkpoint (Issue #80)', () => {
 
       expect(mockPrisma.eventPollerCheckpoint.upsert).toHaveBeenCalledTimes(1);
     });
+
+    it('does not advance the checkpoint when fetchContractEvents rejects, then resumes on the next healthy poll', async () => {
+      const loggerErrorSpy = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      mockStellar.fetchContractEvents.mockRejectedValueOnce(
+        new Error('rpc unavailable'),
+      );
+
+      await expect(service.pollEvents()).resolves.not.toThrow();
+
+      expect(mockPrisma.eventPollerCheckpoint.upsert).not.toHaveBeenCalled();
+      expect(loggerErrorSpy).toHaveBeenCalled();
+      const statusAfterFailure = await service.getCheckpointStatus();
+      expect(statusAfterFailure.lastProcessedLedger).toBe(100);
+
+      mockStellar.fetchContractEvents.mockResolvedValueOnce([]);
+      await service.pollEvents();
+
+      expect(mockPrisma.eventPollerCheckpoint.upsert).toHaveBeenCalledTimes(1);
+      loggerErrorSpy.mockRestore();
+    });
   });
 
   describe('pollEvents — checkpoint write failures do not block polling', () => {

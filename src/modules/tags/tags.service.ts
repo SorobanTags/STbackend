@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
-import { AuditAction, AuditTargetType } from '@prisma/client';
+import { AuditAction, AuditTargetType, Prisma } from '@prisma/client';
 import { CreateTagDto } from './dto/create-tag.dto';
 import { UpdateTagDto } from './dto/update-tag.dto';
 import { MergeTagsDto } from './dto/merge-tags.dto';
@@ -98,11 +98,11 @@ export class TagsService {
    * (most popular first).  Supports an optional label search filter.
    */
   async findAll(query: QueryTagsDto) {
-    const page  = query.page  ?? 1;
-    const limit = query.limit ?? 20;
+    const page  = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip  = (page - 1) * limit;
 
-    const where: any = {};
+    const where: Prisma.TagWhereInput = {};
     if (query.search) {
       where.label = { contains: query.search, mode: 'insensitive' };
     }
@@ -254,41 +254,45 @@ export class TagsService {
     const targetTag = await this.findTagOrThrow(targetTagId);
     await Promise.all(sourceTagIds.map((id) => this.findTagOrThrow(id)));
 
-    // 2. Move course associations in a single transaction
-    await this.prisma.$transaction(async (tx) => {
-      for (const sourceId of sourceTagIds) {
-        // Fetch all course links from this source tag
-        const sourceLinks = await tx.courseTag.findMany({
-          where: { tagId: sourceId },
-          select: { courseId: true },
-        });
-
-        for (const { courseId } of sourceLinks) {
-          // Only create the link if the target isn't already attached
-          const alreadyLinked = await tx.courseTag.findUnique({
-            where: { courseId_tagId: { courseId, tagId: targetTagId } },
-          });
-
-          if (!alreadyLinked) {
-            await tx.courseTag.create({
-              data: { courseId, tagId: targetTagId },
-            });
-          }
-        }
-
-        // Delete the source tag (CASCADE removes its CourseTag rows)
-        await tx.tag.delete({ where: { id: sourceId } });
-      }
-
-      // 3. Recalculate usageCount for the target from the actual join-table rows
-      const liveCount = await tx.courseTag.count({ where: { tagId: targetTagId } });
-      await tx.tag.update({
-        where: { id: targetTagId },
-        data: { usageCount: liveCount },
+    // 2. Move associations from each source tag to the target tag
+    for (const sourceId of sourceTagIds) {
+      const sourceCourses = await this.prisma.courseTag.findMany({
+        where: { tagId: sourceId },
+        select: { courseId: true },
       });
-    });
 
-    const merged = await this.findOne(targetTagId);
+      const targetCourses = await this.prisma.courseTag.findMany({
+        where: { tagId: targetTagId },
+        select: { courseId: true },
+      });
+      const targetCourseIds = new Set(targetCourses.map((c) => c.courseId));
+
+      for (const { courseId } of sourceCourses) {
+        if (targetCourseIds.has(courseId)) {
+          // Course already linked to target — just drop the source link
+          await this.prisma.courseTag.delete({
+            where: { courseId_tagId: { courseId, tagId: sourceId } },
+          });
+        } else {
+          await this.prisma.courseTag.update({
+            where: { courseId_tagId: { courseId, tagId: sourceId } },
+            data: { tagId: targetTagId },
+          });
+        }
+      }
+    }
+
+    // 3. Delete the now-empty source tags
+    await this.prisma.tag.deleteMany({ where: { id: { in: sourceTagIds } } });
+
+    // 4. Recalculate target usageCount from the live join-table count
+    const usageCount = await this.prisma.courseTag.count({
+      where: { tagId: targetTagId },
+    });
+    const updated = await this.prisma.tag.update({
+      where: { id: targetTagId },
+      data: { usageCount },
+    });
 
     await this.auditLog.createEntry(adminId, {
       action: AuditAction.TAG_MERGED,
@@ -297,102 +301,81 @@ export class TagsService {
       metadata: {
         targetLabel: targetTag.label,
         sourceTagIds,
-        newUsageCount: merged.usageCount,
+        newUsageCount: usageCount,
       },
     });
 
     this.logger.log(
-      `Tags merged into "${targetTag.label}" (${targetTagId}): [${sourceTagIds.join(', ')}] by admin ${adminId}`,
+      `Tags merged into "${updated.label}" (${targetTagId}): [${sourceTagIds.join(', ')}] by admin ${adminId}`,
     );
-
-    return merged;
+    return updated;
   }
 
   // ----------------------------------------------------------
-  // ATTACH TAG TO COURSE
+  // ATTACH / DETACH
   // ----------------------------------------------------------
 
   /**
-   * Links an existing tag to a course and increments usageCount.
-   * Idempotent — re-attaching the same tag returns the existing link.
+   * Attaches a tag to a course.  Idempotent: re-attaching an existing link
+   * is a no-op.  Recalculates the tag's usageCount afterwards.
    */
   async attachToCourse(tagId: string, adminId: string, dto: AttachTagDto) {
-    await this.findTagOrThrow(tagId);
+    const tag = await this.findTagOrThrow(tagId);
 
-    // Verify the course exists
-    const course = await this.prisma.course.findUnique({ where: { id: dto.courseId } });
-    if (!course) throw new NotFoundException(`Course ${dto.courseId} not found`);
+    const existing = await this.prisma.courseTag.findUnique({
+      where: { courseId_tagId: { courseId: dto.courseId, tagId } },
+    });
 
-    // Upsert to keep the operation idempotent
+    if (!existing) {
+      await this.prisma.courseTag.create({
+        data: { courseId: dto.courseId, tagId },
+      });
+
+      const usageCount = await this.prisma.courseTag.count({ where: { tagId } });
+      await this.prisma.tag.update({ where: { id: tagId }, data: { usageCount } });
+
+      await this.auditLog.createEntry(adminId, {
+        action: AuditAction.TAG_ATTACHED,
+        targetType: AuditTargetType.TAG,
+        targetId: tagId,
+        metadata: { courseId: dto.courseId, label: tag.label },
+      });
+
+      this.logger.log(`Tag "${tag.label}" attached to course ${dto.courseId} by admin ${adminId}`);
+    }
+
+    return this.findOne(tagId);
+  }
+
+  /**
+   * Detaches a tag from a course.  Idempotent: detaching a non-existent link
+   * is a no-op.  Recalculates the tag's usageCount afterwards.
+   */
+  async detachFromCourse(tagId: string, adminId: string, dto: AttachTagDto) {
+    const tag = await this.findTagOrThrow(tagId);
+
     const existing = await this.prisma.courseTag.findUnique({
       where: { courseId_tagId: { courseId: dto.courseId, tagId } },
     });
 
     if (existing) {
-      return { message: 'Tag is already attached to this course', courseTag: existing };
+      await this.prisma.courseTag.delete({
+        where: { courseId_tagId: { courseId: dto.courseId, tagId } },
+      });
+
+      const usageCount = await this.prisma.courseTag.count({ where: { tagId } });
+      await this.prisma.tag.update({ where: { id: tagId }, data: { usageCount } });
+
+      await this.auditLog.createEntry(adminId, {
+        action: AuditAction.TAG_DETACHED,
+        targetType: AuditTargetType.TAG,
+        targetId: tagId,
+        metadata: { courseId: dto.courseId, label: tag.label },
+      });
+
+      this.logger.log(`Tag "${tag.label}" detached from course ${dto.courseId} by admin ${adminId}`);
     }
 
-    const [courseTag] = await this.prisma.$transaction([
-      this.prisma.courseTag.create({ data: { courseId: dto.courseId, tagId } }),
-      this.prisma.tag.update({
-        where: { id: tagId },
-        data: { usageCount: { increment: 1 } },
-      }),
-    ]);
-
-    this.logger.log(`Tag ${tagId} attached to course ${dto.courseId} by admin ${adminId}`);
-    return { message: 'Tag attached successfully', courseTag };
-  }
-
-  // ----------------------------------------------------------
-  // DETACH TAG FROM COURSE
-  // ----------------------------------------------------------
-
-  /**
-   * Removes the link between a tag and a course, and decrements usageCount
-   * (floor at 0 to guard against any edge-case drift).
-   */
-  async detachFromCourse(tagId: string, courseId: string, adminId: string) {
-    await this.findTagOrThrow(tagId);
-
-    const link = await this.prisma.courseTag.findUnique({
-      where: { courseId_tagId: { courseId, tagId } },
-    });
-    if (!link) {
-      throw new NotFoundException(`Tag ${tagId} is not attached to course ${courseId}`);
-    }
-
-    await this.prisma.$transaction([
-      this.prisma.courseTag.delete({
-        where: { courseId_tagId: { courseId, tagId } },
-      }),
-      // Decrement but never go below 0
-      this.prisma.$executeRaw`
-        UPDATE "tags"
-        SET "usageCount" = GREATEST("usageCount" - 1, 0)
-        WHERE "id" = ${tagId}
-      `,
-    ]);
-
-    this.logger.log(`Tag ${tagId} detached from course ${courseId} by admin ${adminId}`);
-    return { message: 'Tag detached successfully' };
-  }
-
-  // ----------------------------------------------------------
-  // TAGS FOR A COURSE
-  // ----------------------------------------------------------
-
-  /** Returns all tags currently attached to a given course. */
-  async findByCourse(courseId: string) {
-    const course = await this.prisma.course.findUnique({ where: { id: courseId } });
-    if (!course) throw new NotFoundException(`Course ${courseId} not found`);
-
-    const links = await this.prisma.courseTag.findMany({
-      where: { courseId },
-      include: { tag: true },
-      orderBy: { tag: { usageCount: 'desc' } },
-    });
-
-    return links.map((l) => l.tag);
+    return this.findOne(tagId);
   }
 }

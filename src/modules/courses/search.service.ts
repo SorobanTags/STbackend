@@ -43,6 +43,9 @@ export class SearchService {
           totalEnrollments: true,
           avgRating: true,
         },
+        // Order by totalEnrollments desc so the ranking step works on the
+        // most-relevant subset, not an arbitrary database page (issue #32).
+        orderBy: [{ totalEnrollments: 'desc' }, { avgRating: 'desc' }],
         take: limit * 2,
       }),
       (this.prisma as any).courseSearchTerm.findMany({
@@ -98,18 +101,38 @@ export class SearchService {
   }
 
   private async trackSearchTerm(term: string) {
-    await (this.prisma as any).courseSearchTerm.upsert({
-      where: { term },
-      create: { term, searchCount: 1 },
-      update: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
-    });
+    try {
+      await (this.prisma as any).courseSearchTerm.upsert({
+        where: { term },
+        create: { term, searchCount: 1 },
+        update: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
+      });
+    } catch (err: unknown) {
+      // A unique-constraint violation means a concurrent request inserted the
+      // same term between our WHERE check and our CREATE.  Retry once as an
+      // update-only path instead of letting the error surface to the caller
+      // (issue #31).
+      const isUniqueViolation =
+        err instanceof Error && (err as any).code === 'P2002';
+      if (!isUniqueViolation) throw err;
+      await (this.prisma as any).courseSearchTerm.update({
+        where: { term },
+        data: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
+      });
+    }
   }
 
   private addSuggestion(suggestions: Map<string, CourseSearchSuggestion>, suggestion: CourseSearchSuggestion) {
     const key = `${suggestion.type}:${suggestion.text.toLowerCase()}`;
     const existing = suggestions.get(key);
     if (!existing || suggestion.rank > existing.rank) {
-      suggestions.set(key, suggestion);
+      // Normalise to title-case so deduplication always produces consistent
+      // output regardless of which raw casing was seen first (issue #38).
+      const normalizedText = suggestion.text
+        .split(' ')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(' ');
+      suggestions.set(key, { ...suggestion, text: normalizedText });
     }
   }
 
@@ -126,6 +149,11 @@ export class SearchService {
     const normalizedText = text.toLowerCase();
     if (normalizedText === query) return baseScore + 100;
     if (normalizedText.startsWith(query)) return baseScore + 50;
+    // Reward whole-word (word-boundary) matches above arbitrary mid-word hits
+    // so "java" in "Java basics" outranks "java" inside "javascript" (issue #37).
+    const wordBoundaryRe = new RegExp(`\\b${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+    if (wordBoundaryRe.test(normalizedText)) return baseScore + 25;
+    if (normalizedText.includes(query)) return baseScore + 10;
     return baseScore;
   }
 }

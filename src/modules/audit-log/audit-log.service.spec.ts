@@ -84,6 +84,37 @@ describe('AuditLogService', () => {
     });
   });
 
+  describe('exportAuditLogCsv', () => {
+    const makeRow = (id: string) => ({
+      actorId: 'admin-1',
+      actor: { name: 'Admin', email: 'admin@example.com' },
+      action: AuditAction.COURSE_APPROVED,
+      targetType: AuditTargetType.COURSE,
+      targetId: id,
+      metadata: null,
+      ipAddress: '127.0.0.1',
+      createdAt: new Date('2024-01-01T00:00:00.000Z'),
+    });
+
+    it('should emit a single header and one line per entry across batches', async () => {
+      const batchSize = 500;
+      const firstBatch = Array.from({ length: batchSize }, (_, i) => makeRow(`course-${i}`));
+      const secondBatch = Array.from({ length: 3 }, (_, i) => makeRow(`course-${batchSize + i}`));
+
+      mockPrisma.adminAuditLog.findMany
+        .mockResolvedValueOnce(firstBatch)
+        .mockResolvedValueOnce(secondBatch);
+
+      const csv = await service.exportAuditLogCsv({});
+      const lines = csv.split('\n');
+
+      const headerLines = lines.filter((line) => line.startsWith('createdAt,'));
+      expect(headerLines).toHaveLength(1);
+      expect(lines).toHaveLength(1 + batchSize + secondBatch.length);
+      expect(prisma.adminAuditLog.findMany).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('purgeOldEntries', () => {
     it('should delete entries older than retention days', async () => {
       mockPrisma.adminAuditLog.deleteMany.mockResolvedValue({ count: 5 });

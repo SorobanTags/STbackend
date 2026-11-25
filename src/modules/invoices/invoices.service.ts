@@ -22,7 +22,8 @@ export class InvoicesService {
    */
   async generateForEnrollment(enrollmentId: string) {
     const existing = await this.prisma.invoice.findUnique({ where: { enrollmentId } });
-    if (existing) return existing;
+    // Only a fully delivered invoice short-circuits; an unsent one is retried below.
+    if (existing?.emailSent) return existing;
 
     const enrollment = await this.prisma.enrollment.findUnique({
       where: { id: enrollmentId },
@@ -32,24 +33,34 @@ export class InvoicesService {
 
     await this.validatePayment(enrollment.txHash, Number(enrollment.amountPaid));
 
-    const invoice = await this.prisma.invoice.create({
-      data: {
-        enrollmentId: enrollment.id,
-        studentId: enrollment.studentId,
-        courseId: enrollment.courseId,
-        amount: enrollment.amountPaid,
-        txHash: enrollment.txHash,
-      },
-    });
+    // Reuse the row from a previous failed attempt; the PDF needs its invoiceNumber, so create comes before render.
+    const invoice =
+      existing ??
+      (await this.prisma.invoice.create({
+        data: {
+          enrollmentId: enrollment.id,
+          studentId: enrollment.studentId,
+          courseId: enrollment.courseId,
+          amount: enrollment.amountPaid,
+          txHash: enrollment.txHash,
+        },
+      }));
 
-    const pdfBuffer = await this.renderInvoicePdf({
-      invoiceNumber: invoice.invoiceNumber,
-      studentName: enrollment.student.name ?? enrollment.student.stellarAddress,
-      courseTitle: enrollment.course.title,
-      amount: Number(enrollment.amountPaid),
-      txHash: enrollment.txHash,
-      issuedAt: invoice.issuedAt,
-    });
+    let pdfBuffer: Buffer;
+    try {
+      pdfBuffer = await this.renderInvoicePdf({
+        invoiceNumber: invoice.invoiceNumber,
+        studentName: enrollment.student.name ?? enrollment.student.stellarAddress,
+        courseTitle: enrollment.course.title,
+        amount: Number(enrollment.amountPaid),
+        txHash: enrollment.txHash,
+        issuedAt: invoice.issuedAt,
+      });
+    } catch (error) {
+      // Roll back the new row so a retry starts clean. Existing rows are kept for retry.
+      if (!existing) await this.prisma.invoice.delete({ where: { id: invoice.id } });
+      throw error;
+    }
 
     if (enrollment.student.email) {
       const sent = await this.notifications.sendInvoiceEmail(

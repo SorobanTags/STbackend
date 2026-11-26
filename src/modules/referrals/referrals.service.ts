@@ -14,6 +14,7 @@ import {
   ReferralRewardKind,
   ReferralRewardStatus,
   ReferralStatus,
+  Prisma,
 } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { UpdateRewardRulesDto } from './dto/update-reward-rules.dto';
@@ -81,11 +82,24 @@ export class ReferralsService {
       if (!row) return this.getDefaultRules();
       return this.toRules(row);
     } catch (error) {
+      // #106: only fall back when the rules store itself is missing (a
+      // migration hasn't run). Any other failure (outage, pool exhaustion)
+      // propagates so callers get a 5xx instead of silently changed discounts.
+      if (!ReferralsService.isRulesStoreUnavailable(error)) throw error;
       this.logger.warn(
-        `Falling back to .env referral reward rules: ${(error as Error)?.message}`,
+        `Referral reward rules table unavailable (${(error as Prisma.PrismaClientKnownRequestError).code}); ` +
+          `using .env defaults — these are NOT the stored rules: ${(error as Error)?.message}`,
       );
       return this.getDefaultRules();
     }
+  }
+
+  /** Prisma codes meaning the rules table/column doesn't exist (P2021, P2022). */
+  private static isRulesStoreUnavailable(error: unknown): boolean {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === 'P2021' || error.code === 'P2022')
+    );
   }
 
   async updateRewardRules(

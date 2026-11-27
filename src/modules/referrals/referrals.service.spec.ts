@@ -13,6 +13,7 @@ import {
   ReferralRewardKind,
   ReferralRewardStatus,
   ReferralStatus,
+  Prisma,
 } from '@prisma/client';
 
 describe('ReferralsService', () => {
@@ -353,6 +354,43 @@ describe('ReferralsService', () => {
 
       expect(result).toEqual(updated);
       expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('getRewardRules error handling (#106)', () => {
+    const defaults = {
+      referrerDiscountPercent: 10,
+      refereeDiscountPercent: 10,
+      rewardExpiryDays: 90,
+    };
+
+    function prismaError(code: string) {
+      return new Prisma.PrismaClientKnownRequestError(`code ${code}`, {
+        code,
+        clientVersion: 'test',
+      });
+    }
+
+    it.each(['P2021', 'P2022'])('falls back to .env defaults when the rules store is missing (%s)', async (code) => {
+      mockPrisma.referralRewardRule.findUnique.mockRejectedValueOnce(prismaError(code));
+      await expect(service.getRewardRules()).resolves.toEqual(expect.objectContaining(defaults));
+    });
+
+    it('rethrows any other error instead of falling back', async () => {
+      const outage = new Error('Connection pool timeout');
+      mockPrisma.referralRewardRule.findUnique.mockRejectedValueOnce(outage);
+      await expect(service.getRewardRules()).rejects.toBe(outage);
+    });
+
+    it('rethrows other Prisma known errors too', async () => {
+      mockPrisma.referralRewardRule.findUnique.mockRejectedValueOnce(prismaError('P1001'));
+      await expect(service.getRewardRules()).rejects.toMatchObject({ code: 'P1001' });
+    });
+
+    it('does not persist fallback values when an update hits a real outage', async () => {
+      mockPrisma.referralRewardRule.findUnique.mockRejectedValueOnce(new Error('db down'));
+      await expect(service.updateRewardRules({ rewardExpiryDays: 30 } as any)).rejects.toThrow('db down');
+      expect(mockPrisma.referralRewardRule.upsert).not.toHaveBeenCalled();
     });
   });
 });

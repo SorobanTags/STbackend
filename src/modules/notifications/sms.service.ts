@@ -72,12 +72,12 @@ export class SmsService {
       throw new BadRequestException(`Unsupported country code: ${countryCode}`);
     }
 
-    const trimmed = phoneNumber?.trim();
-    if (!trimmed || !pattern.test(trimmed)) {
+    const normalized = phoneNumber?.trim().replace(/[\s\-()]/g, '');
+    if (!normalized || !pattern.test(normalized)) {
       throw new BadRequestException(`Invalid phone number format for country ${country}`);
     }
 
-    return this.toE164(trimmed, country);
+    return this.toE164(normalized, country);
   }
 
   renderTemplate(templateKey: SmsTemplateKey, data: Record<string, string | number> = {}): string {
@@ -86,9 +86,20 @@ export class SmsService {
       throw new BadRequestException(`Unknown SMS template: ${templateKey}`);
     }
 
-    return template.replace(/{{\s*(\w+)\s*}}/g, (_match, key) =>
-      data[key] !== undefined ? String(data[key]) : `{{${key}}}`,
-    );
+    const missing: string[] = [];
+    const rendered = template.replace(/{{\s*(\w+)\s*}}/g, (_match, key) => {
+      if (data[key] === undefined) {
+        missing.push(key);
+        return _match;
+      }
+      return String(data[key]);
+    });
+
+    if (missing.length > 0) {
+      throw new BadRequestException('Missing SMS template values: ' + missing.join(', '));
+    }
+
+    return rendered;
   }
 
   async sendSms(params: SendSmsParams) {

@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
 
 describe('Analytics bounded reads (#179)', () => {
@@ -24,5 +25,23 @@ describe('Analytics bounded reads (#179)', () => {
       take: 200,
       where: { occurredAt: { gte: new Date('2026-10-01'), lte: new Date('2026-10-02') } },
     }));
+  });
+
+  it('passes the validated range to groupBy for volume queries', async () => {
+    await service.getVolumeByEventType('2026-10-01', '2026-10-02');
+    expect(prisma.analyticsEvent.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+      where: { occurredAt: { gte: new Date('2026-10-01'), lte: new Date('2026-10-02') } },
+    }));
+  });
+
+  it('rejects a volume query without bounds', async () => {
+    await expect(service.getVolumeByEventType(undefined, undefined)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.analyticsEvent.groupBy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a volume query spanning more than 90 days', async () => {
+    await expect(service.getVolumeByEventType('2026-01-01', '2026-06-01'))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.analyticsEvent.groupBy).not.toHaveBeenCalled();
   });
 });

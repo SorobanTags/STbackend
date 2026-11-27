@@ -14,6 +14,13 @@ import { ProcessRefundDto } from './dto/process-refund.dto';
 /** Refund requests must be filed within this many days of enrollment. */
 const REFUND_ELIGIBILITY_WINDOW_DAYS = 14;
 
+/** Enrollment statuses that cannot have a refund request filed against them. */
+const NON_REFUNDABLE_STATUSES: EnrollmentStatus[] = [
+  EnrollmentStatus.PENDING,
+  EnrollmentStatus.CANCELLED,
+  EnrollmentStatus.EXPIRED,
+];
+
 @Injectable()
 export class RefundsService {
   private readonly logger = new Logger(RefundsService.name);
@@ -38,6 +45,11 @@ export class RefundsService {
     if (enrollment.status === EnrollmentStatus.REFUNDED) {
       throw new ConflictException('This enrollment has already been refunded');
     }
+    if (NON_REFUNDABLE_STATUSES.includes(enrollment.status)) {
+      throw new BadRequestException(
+        `Cannot request a refund for an enrollment with status ${enrollment.status}`,
+      );
+    }
 
     const existing = await this.prisma.refund.findFirst({
       where: {
@@ -59,6 +71,9 @@ export class RefundsService {
 
     const amountPaid = Number(enrollment.amountPaid);
     const requestedAmount = dto.requestedAmount ?? amountPaid;
+    if (requestedAmount <= 0) {
+      throw new BadRequestException('Requested refund amount must be greater than zero');
+    }
     if (requestedAmount > amountPaid) {
       throw new BadRequestException('Requested amount cannot exceed the amount paid');
     }
@@ -209,32 +224,37 @@ export class RefundsService {
       }),
       ...(isFullRefund
         ? [this.prisma.enrollment.update({
-            where: { id: enrollment.id },
+            where: { id: refund.enrollmentId },
             data: { status: EnrollmentStatus.REFUNDED },
           })]
         : []),
     ]);
 
-    this.logger.log(`Refund processed: ${id} (${isFullRefund ? 'full' : 'partial'})`);
+    this.logger.log(`Refund processed: ${id} by admin ${adminId}`);
     return updatedRefund;
   }
 
-  private getAllowedRefundTransitions(currentStatus: RefundStatus): RefundStatus[] {
-    const transitions: Record<RefundStatus, RefundStatus[]> = {
-      [RefundStatus.PENDING]: [RefundStatus.APPROVED, RefundStatus.REJECTED],
-      [RefundStatus.APPROVED]: [RefundStatus.PROCESSED],
-      [RefundStatus.REJECTED]: [],
-      [RefundStatus.PROCESSED]: [],
-    };
-    return transitions[currentStatus] || [];
-  }
+  // ----------------------------------------------------------
+  // HELPERS
+  // ----------------------------------------------------------
 
   private async getPendingOrThrow(id: string) {
     const refund = await this.prisma.refund.findUnique({ where: { id } });
     if (!refund) throw new NotFoundException('Refund not found');
     if (refund.status !== RefundStatus.PENDING) {
-      throw new BadRequestException('Only PENDING refund requests can be reviewed');
+      throw new BadRequestException(`Refund is not pending (current status: ${refund.status})`);
     }
     return refund;
+  }
+
+  private getAllowedRefundTransitions(current: RefundStatus): RefundStatus[] {
+    switch (current) {
+      case RefundStatus.PENDING:
+        return [RefundStatus.APPROVED, RefundStatus.REJECTED];
+      case RefundStatus.APPROVED:
+        return [RefundStatus.PROCESSED, RefundStatus.REJECTED];
+      default:
+        return [];
+    }
   }
 }

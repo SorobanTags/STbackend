@@ -80,8 +80,51 @@ describe('AnalyticsService', () => {
         ],
       });
 
-      expect(result).toEqual({ ingested: 3, requested: 3 });
+      expect(result).toEqual({ ingested: 3, requested: 3, rejected: [] });
       expect(mockPrisma.analyticsEvent.createMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips invalid events and reports them with index and reason', async () => {
+      mockPrisma.analyticsEvent.createMany.mockResolvedValue({ count: 2 });
+
+      const result = await service.trackEventsBatch({
+        events: [
+          { eventType: 'click', path: '/a' },
+          { eventType: '   ' } as any,
+          { eventType: 'page_view', path: '/c' },
+        ],
+      });
+
+      expect(mockPrisma.analyticsEvent.createMany).toHaveBeenCalledTimes(1);
+      const call = mockPrisma.analyticsEvent.createMany.mock.calls[0][0];
+      expect(call.data).toHaveLength(2);
+      expect(call.data).toEqual([
+        expect.objectContaining({ eventType: 'click', path: '/a' }),
+        expect.objectContaining({ eventType: 'page_view', path: '/c' }),
+      ]);
+
+      expect(result.ingested).toBe(2);
+      expect(result.requested).toBe(3);
+      expect(result.rejected).toHaveLength(1);
+      expect(result.rejected[0]).toEqual({
+        index: 1,
+        reason: expect.any(String),
+      });
+    });
+
+    it('surfaces a createMany count lower than the number of valid events', async () => {
+      mockPrisma.analyticsEvent.createMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.trackEventsBatch({
+        events: [
+          { eventType: 'click', path: '/a' },
+          { eventType: 'click', path: '/b' },
+        ],
+      });
+
+      expect(result.ingested).toBe(1);
+      expect(result.requested).toBe(2);
+      expect(result.rejected).toEqual([]);
     });
 
     it('rejects empty batches', async () => {
@@ -104,6 +147,35 @@ describe('AnalyticsService', () => {
         { eventType: 'page_view', count: 10 },
         { eventType: 'click', count: 4 },
       ]);
+    });
+
+    it('passes the validated bounded range to groupBy', async () => {
+      mockPrisma.analyticsEvent.groupBy.mockResolvedValue([]);
+
+      await service.getVolumeByEventType('2026-01-01', '2026-01-31');
+
+      expect(mockPrisma.analyticsEvent.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            occurredAt: {
+              gte: new Date('2026-01-01'),
+              lte: new Date('2026-01-31'),
+            },
+          },
+        }),
+      );
+    });
+
+    it('throws when from/to are missing', async () => {
+      await expect(
+        service.getVolumeByEventType(undefined, undefined),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws when the range exceeds 90 days', async () => {
+      await expect(
+        service.getVolumeByEventType('2026-01-01', '2026-06-01'),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 
@@ -129,6 +201,33 @@ describe('AnalyticsService', () => {
         limit: 10,
         totalPages: 1,
       });
+    });
+
+    it('passes the validated bounded range to findMany', async () => {
+      mockPrisma.analyticsEvent.findMany.mockResolvedValue([]);
+      mockPrisma.analyticsEvent.count.mockResolvedValue(0);
+
+      await service.queryRawEvents({
+        from: '2026-01-01',
+        to: '2026-01-31',
+      });
+
+      expect(mockPrisma.analyticsEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            occurredAt: {
+              gte: new Date('2026-01-01'),
+              lte: new Date('2026-01-31'),
+            },
+          },
+        }),
+      );
+    });
+
+    it('throws when the range exceeds 90 days', async () => {
+      await expect(
+        service.queryRawEvents({ from: '2026-01-01', to: '2026-06-01' }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

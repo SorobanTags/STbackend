@@ -87,6 +87,29 @@ export class BatchTrackAnalyticsEventsDto {
   events: TrackAnalyticsEventDto[];
 }
 
+/**
+ * Per-event rejection reported by batch ingestion.
+ * `index` is the position of the offending event in the submitted `events` array.
+ */
+export interface RejectedAnalyticsEvent {
+  index: number;
+  reason: string;
+}
+
+/**
+ * Result of `AnalyticsService.trackEventsBatch`.
+ *
+ * Invalid events are skipped rather than rejecting the whole batch; each skipped
+ * event is reported in `rejected`. `ingested` reflects the actual number of rows
+ * written by `createMany`, which may be lower than the number of valid events
+ * (e.g. on a partial write).
+ */
+export interface TrackEventsBatchResult {
+  ingested: number;
+  requested: number;
+  rejected: RejectedAnalyticsEvent[];
+}
+
 export class QueryAnalyticsEventsDto extends PaginationQueryDto {
   @ApiPropertyOptional({ example: 'page_view' })
   @IsOptional()

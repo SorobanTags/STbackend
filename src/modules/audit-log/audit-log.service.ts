@@ -1,18 +1,32 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AuditAction, AuditTargetType } from '@prisma/client';
 import { CreateAuditLogDto } from './dto/create-audit-log.dto';
 import { QueryAuditLogDto } from './dto/query-audit-log.dto';
+
+export interface AuditLogCsvRow {
+  actorId: string | null;
+  actor: { name: string | null; email: string | null } | null;
+  action: AuditAction;
+  targetType: AuditTargetType;
+  targetId: string | null;
+  metadata: unknown;
+  ipAddress: string | null;
+  createdAt: Date;
+}
 
 @Injectable()
 export class AuditLogService {
   private readonly logger = new Logger(AuditLogService.name);
+  private readonly retentionDays: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
-  ) {}
+  ) {
+    this.retentionDays = this.configService.get<number>('AUDIT_LOG_RETENTION_DAYS', 90);
+  }
 
   async createEntry(actorId: string, dto: CreateAuditLogDto) {
     return this.prisma.adminAuditLog.create({
@@ -28,20 +42,11 @@ export class AuditLogService {
   }
 
   async findAll(query: QueryAuditLogDto) {
-    const page = Math.max(1, query.page ?? 1);
-    const limit = Math.min(200, Math.max(1, query.limit ?? 50));
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where: any = {};
-    if (query.actorId) where.actorId = query.actorId;
-    if (query.action) where.action = query.action;
-    if (query.targetType) where.targetType = query.targetType;
-    if (query.targetId) where.targetId = query.targetId;
-
-    const defaultFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    where.createdAt = {};
-    where.createdAt.gte = query.from ? new Date(query.from) : defaultFrom;
-    if (query.to) where.createdAt.lte = new Date(query.to);
+    const where = this.buildWhere(query);
 
     const [data, total] = await Promise.all([
       this.prisma.adminAuditLog.findMany({
@@ -49,15 +54,7 @@ export class AuditLogService {
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: {
-          actor: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-        },
+        include: { actor: { select: { name: true, email: true } } },
       }),
       this.prisma.adminAuditLog.count({ where }),
     ]);
@@ -71,112 +68,107 @@ export class AuditLogService {
     };
   }
 
-  /**
-   * Export audit log entries as CSV (admin-only).
-   * Streams results in batches to avoid loading entire result set into memory.
-   */
-  async exportAuditLogCsv(query: QueryAuditLogDto): Promise<{
-    csv: string;
-    rowCount: number;
-  }> {
-    const batchSize = 1000;
-    const where: any = {};
-
-    if (query.actorId) where.actorId = query.actorId;
-    if (query.action) where.action = query.action;
-    if (query.targetType) where.targetType = query.targetType;
-    if (query.targetId) where.targetId = query.targetId;
-
-    const defaultFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    where.createdAt = {};
-    where.createdAt.gte = query.from ? new Date(query.from) : defaultFrom;
-    if (query.to) where.createdAt.lte = new Date(query.to);
-
-    // Export in bounded batches so a large history does not require one
-    // unbounded Prisma result set in memory.
-    const entries: any[] = [];
+  async exportAuditLogCsv(query: QueryAuditLogDto): Promise<string> {
+    const where = this.buildWhere(query);
+    const batchSize = 500;
     let skip = 0;
     let hasMore = true;
+
+    const lines: string[] = [];
+    let headerWritten = false;
+
     while (hasMore) {
-      const batch = await this.prisma.adminAuditLog.findMany({
+      const batch = (await this.prisma.adminAuditLog.findMany({
         where,
         skip,
         take: batchSize,
         orderBy: { createdAt: 'desc' },
-        include: {
-          actor: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-        },
-      });
-      entries.push(...batch);
+        include: { actor: { select: { name: true, email: true } } },
+      })) as AuditLogCsvRow[];
+
+      if (!headerWritten) {
+        lines.push(this.csvHeader());
+        headerWritten = true;
+      }
+
+      for (const row of batch) {
+        lines.push(this.csvLine(row));
+      }
+
       hasMore = batch.length === batchSize;
-      skip += batch.length;
+      skip += batchSize;
     }
 
-    const csv = this.toCsvString(entries);
-    return { csv, rowCount: entries.length };
+    if (!headerWritten) {
+      lines.push(this.csvHeader());
+    }
+
+    return lines.join('\n');
   }
 
-  /**
-   * Convert audit log entries to CSV string.
-   */
-  private toCsvString(entries: any[]): string {
-    const headers = [
+  private csvHeader(): string {
+    return [
+      'createdAt',
       'actorId',
       'actorName',
       'actorEmail',
       'action',
       'targetType',
       'targetId',
-      'metadata',
       'ipAddress',
-      'createdAt',
-    ];
-
-    const escape = (value: unknown) => {
-      const str = String(value ?? '');
-      return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
-    };
-
-    const lines = entries.map((entry) =>
-      [
-        entry.actorId,
-        entry.actor?.name ?? '',
-        entry.actor?.email ?? '',
-        entry.action,
-        entry.targetType,
-        entry.targetId,
-        entry.metadata ? JSON.stringify(entry.metadata) : '',
-        entry.ipAddress ?? '',
-        entry.createdAt?.toISOString() ?? '',
-      ].map(escape).join(','),
-    );
-
-    return [headers.join(','), ...lines].join('\n');
+      'metadata',
+    ].join(',');
   }
 
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
-  async purgeOldEntries() {
-    const retentionDays = this.configService.get<number>('AUDIT_LOG_RETENTION_DAYS', 90);
-    const purgeDate = new Date();
-    purgeDate.setDate(purgeDate.getDate() - retentionDays);
+  private csvLine(row: AuditLogCsvRow): string {
+    return [
+      row.createdAt.toISOString(),
+      row.actorId ?? '',
+      row.actor?.name ?? '',
+      row.actor?.email ?? '',
+      row.action,
+      row.targetType,
+      row.targetId ?? '',
+      row.ipAddress ?? '',
+      row.metadata ? JSON.stringify(row.metadata) : '',
+    ]
+      .map((value) => this.escape(String(value)))
+      .join(',');
+  }
 
-    try {
-      const result = await this.prisma.adminAuditLog.deleteMany({
-        where: {
-          createdAt: {
-            lt: purgeDate,
-          },
-        },
-      });
-      this.logger.log(`Purged ${result.count} old audit log entries (older than ${retentionDays} days)`);
-    } catch (error) {
-      this.logger.error('Failed to purge old audit log entries', error);
+  private escape(value: string): string {
+    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+      return `"${value.replace(/"/g, '""')}"`;
     }
+    return value;
+  }
+
+  async purgeOldEntries() {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - this.retentionDays);
+
+    const result = await this.prisma.adminAuditLog.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    });
+
+    this.logger.log(`Purged ${result.count} audit log entries older than ${this.retentionDays} days`);
+    return result;
+  }
+
+  private buildWhere(query: QueryAuditLogDto) {
+    const where: Record<string, unknown> = {};
+
+    if (query.actorId) where.actorId = query.actorId;
+    if (query.action) where.action = query.action;
+    if (query.targetType) where.targetType = query.targetType;
+    if (query.targetId) where.targetId = query.targetId;
+    if (query.startDate || query.endDate) {
+      where.createdAt = {
+        ...(query.startDate ? { gte: new Date(query.startDate) } : {}),
+        ...(query.endDate ? { lte: new Date(query.endDate) } : {}),
+      };
+    }
+
+    return where;
   }
 }

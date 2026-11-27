@@ -193,7 +193,7 @@ export class EnvironmentVariables {
   CDN_SIGNING_SECRET?: string;
 
   @IsOptional()
-  @Matches(/^\d+$/, { message: 'CDN_SIGNED_URL_TTL_SECONDS must be numeric' })
+  @IsString()
   CDN_SIGNED_URL_TTL_SECONDS?: string;
 
   // ----------------------------------------------------------
@@ -442,10 +442,10 @@ export class EnvironmentVariables {
   // ----------------------------------------------------------
   // Webhook signatures
   // ----------------------------------------------------------
-  @IsDefined()
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  WEBHOOK_SECRET: string;
+  WEBHOOK_SECRET?: string;
 
   @IsOptional()
   @IsString()

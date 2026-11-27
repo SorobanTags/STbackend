@@ -33,9 +33,37 @@ export class UsersService {
   ) {
     try {
       return await this.prisma.user.update({ where: { id }, data });
-    } catch (error: any) {
-      if (error?.code === 'P2002') {
-        throw new ConflictException('An account with this email address already exists');
+    } catch (error: unknown) {
+      const errorRecord =
+        typeof error === 'object' && error !== null
+          ? (error as { code?: unknown; meta?: unknown })
+          : undefined;
+      const meta =
+        typeof errorRecord?.meta === 'object' && errorRecord.meta !== null
+          ? (errorRecord.meta as Record<string, unknown>)
+          : undefined;
+
+      switch (errorRecord?.code) {
+        case 'P2025':
+          throw new NotFoundException('User not found');
+        case 'P2000': {
+          const column =
+            typeof meta?.column_name === 'string' ? meta.column_name : 'one or more fields';
+          throw new BadRequestException(`Invalid value for ${column}`);
+        }
+        case 'P2002': {
+          const target = meta?.target;
+          const fields =
+            typeof target === 'string'
+              ? [target]
+              : Array.isArray(target)
+                ? target.filter((field): field is string => typeof field === 'string')
+                : [];
+          const fieldLabel = fields.length ? fields.join(', ') : 'a unique field';
+          throw new ConflictException(
+            `A record with the conflicting value for ${fieldLabel} already exists`,
+          );
+        }
       }
       throw error;
     }
@@ -77,39 +105,48 @@ export class UsersService {
       throw new ForbiddenException('Cannot ban admin users');
     }
 
-    // Update user status
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        isBanned: true,
-        bannedAt: new Date(),
-        banReason: reason,
-        // Also clear suspension if any
-        isSuspended: false,
-        suspendedAt: null,
-        suspendedUntil: null,
-        suspensionReason: null,
-      },
-    });
+    // Update user status and write the audit log atomically. The isBanned guard
+    // lives in the update's where clause so a concurrent ban fails (P2025)
+    // instead of producing a duplicate audit record.
+    try {
+      const [updatedUser] = await this.prisma.$transaction([
+        this.prisma.user.update({
+          where: { id: userId, isBanned: false },
+          data: {
+            isBanned: true,
+            bannedAt: new Date(),
+            banReason: reason,
+            // Also clear suspension if any
+            isSuspended: false,
+            suspendedAt: null,
+            suspendedUntil: null,
+            suspensionReason: null,
+          },
+        }),
+        this.prisma.adminAuditLog.create({
+          data: {
+            actorId: adminId,
+            action: AuditAction.USER_BANNED,
+            targetType: AuditTargetType.USER,
+            targetId: userId,
+            metadata: {
+              reason,
+              userEmail: user.email,
+              userName: user.name,
+              stellarAddress: user.stellarAddress,
+            },
+            ipAddress,
+          },
+        }),
+      ]);
 
-    // Create audit log
-    await this.prisma.adminAuditLog.create({
-      data: {
-        actorId: adminId,
-        action: AuditAction.USER_BANNED,
-        targetType: AuditTargetType.USER,
-        targetId: userId,
-        metadata: {
-          reason,
-          userEmail: user.email,
-          userName: user.name,
-          stellarAddress: user.stellarAddress,
-        },
-        ipAddress,
-      },
-    });
-
-    return updatedUser;
+      return updatedUser;
+    } catch (error: any) {
+      if (error?.code === 'P2025') {
+        throw new BadRequestException('User is already banned');
+      }
+      throw error;
+    }
   }
 
   /**
@@ -131,36 +168,45 @@ export class UsersService {
       throw new BadRequestException('User is not banned');
     }
 
-    // Update user status
-    const updatedUser = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        isBanned: false,
-        bannedAt: null,
-        banReason: null,
-      },
-    });
+    // Update user status and write the audit log atomically. The isBanned guard
+    // lives in the update's where clause so a concurrent unban fails (P2025)
+    // instead of producing a duplicate audit record.
+    try {
+      const [updatedUser] = await this.prisma.$transaction([
+        this.prisma.user.update({
+          where: { id: userId, isBanned: true },
+          data: {
+            isBanned: false,
+            bannedAt: null,
+            banReason: null,
+          },
+        }),
+        this.prisma.adminAuditLog.create({
+          data: {
+            actorId: adminId,
+            action: AuditAction.USER_UNBANNED,
+            targetType: AuditTargetType.USER,
+            targetId: userId,
+            metadata: {
+              reason: reason || 'No reason provided',
+              userEmail: user.email,
+              userName: user.name,
+              stellarAddress: user.stellarAddress,
+              previousBanReason: user.banReason,
+              bannedAt: user.bannedAt,
+            },
+            ipAddress,
+          },
+        }),
+      ]);
 
-    // Create audit log
-    await this.prisma.adminAuditLog.create({
-      data: {
-        actorId: adminId,
-        action: AuditAction.USER_UNBANNED,
-        targetType: AuditTargetType.USER,
-        targetId: userId,
-        metadata: {
-          reason: reason || 'No reason provided',
-          userEmail: user.email,
-          userName: user.name,
-          stellarAddress: user.stellarAddress,
-          previousBanReason: user.banReason,
-          bannedAt: user.bannedAt,
-        },
-        ipAddress,
-      },
-    });
-
-    return updatedUser;
+      return updatedUser;
+    } catch (error: any) {
+      if (error?.code === 'P2025') {
+        throw new BadRequestException('User is not banned');
+      }
+      throw error;
+    }
   }
 
   /**

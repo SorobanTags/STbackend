@@ -1,67 +1,18 @@
 import {
-  ForbiddenException,
-  InternalServerErrorException,
-  UnauthorizedException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Reflector } from '@nestjs/core';
-import { NextFunction, Request, Response } from 'express';
-import { createHmac } from 'crypto';
-import { WebhookSignatureMiddleware } from './webhook-signature.middleware';
-
-const rawBody = Buffer.from('webhook payload');
-const defaultSecret = 'default-secret';
-
-function signature(secret: string, body = rawBody): string {
-  return createHmac('sha256', secret).update(body).digest('hex');
-}
-
-function createMiddleware(secrets: Record<string, string>) {
-  const config = {
-    get: jest.fn((key: string) => secrets[key]),
-  } as unknown as ConfigService;
-  const middleware = new WebhookSignatureMiddleware(config, new Reflector());
-  const next = jest.fn() as NextFunction;
-
-  return { middleware, next };
-}
-
-function createRequest(
-  headers: Record<string, string>,
-  body: Buffer | undefined,
-  originalUrl = '/api/v1/webhooks/provider/events',
-): Request & { rawBody?: Buffer } {
-  return {
-    method: 'POST',
-    originalUrl,
-    headers,
-    rawBody: body,
-  } as Request & { rawBody?: Buffer };
-}
-
-describe('WebhookSignatureMiddleware', () => {
-  it('rejects a request without a signature header', () => {
+  it('accepts a Stripe v1 signature', () => {
     const { middleware, next } = createMiddleware({
       WEBHOOK_SECRET: defaultSecret,
     });
-
-    expect(() =>
-      middleware.use(createRequest({}, rawBody), {} as Response, next),
-    ).toThrow(UnauthorizedException);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['x-webhook-signature', (hex: string) => `sha256=${hex}`],
-    ['x-webhook-signature', (hex: string) => hex],
-    ['x-hub-signature-256', (hex: string) => `sha256=${hex}`],
-  ])('accepts a valid signature from %s', (header, format) => {
-    const { middleware, next } = createMiddleware({
-      WEBHOOK_SECRET: defaultSecret,
-    });
-    const headers = { [header]: format(signature(defaultSecret)) };
+    const headers = {
+      'stripe-signature': `t=12345,v1=${signature(defaultSecret)}`,
+    };
 
     middleware.use(createRequest(headers, rawBody), {} as Response, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers the provider-specific secret over the default', () => 
 
     expect(next).toHaveBeenCalledTimes(1);
   });
@@ -146,4 +97,176 @@ describe('WebhookSignatureMiddleware', () => {
       expect(next).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects an invalid signature", () => {
+    const req = createRequest("0".repeat(64));
+    const next = jest.fn() as NextFunction;
+
+    expect(() => middleware.use(req, {} as Response, next)).toThrow(
+      ForbiddenException,
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing signature", () => {
+    const req = createRequest();
+    const next = jest.fn() as NextFunction;
+
+    expect(() => middleware.use(req, {} as Response, next)).toThrow(
+      UnauthorizedException,
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("bypasses signature verification for a route marked with the skip decorator", () => {
+    class TestWebhookController {
+      @SkipWebhookSignature()
+      ping() {}
+    }
+
+    const req = createRequest() as Request & {
+      rawBody: Buffer;
+      _webhookSignatureSkipped?: boolean;
+    };
+    const context = {
+      getHandler: () => TestWebhookController.prototype.ping,
+      getClass: () => TestWebhookController,
+      switchToHttp: () => ({ getRequest: () => req }),
+    };
+    const skipGuard = new WebhookSkipGuard(reflector);
+    const next = jest.fn() as NextFunction;
+
+    expect(skipGuard.canActivate(context as ExecutionContext)).toBe(true);
+    middleware.use(req, {} as Response, next);
+
+    expect(req._webhookSignatureSkipped).toBe(true);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  describe("skip flag — @SkipWebhookSignature() opt-out", () => {
+    it("calls next() without verifying when _webhookSignatureSkipped is true", () => {
+      const req = createRequest() as Request & {
+        rawBody: Buffer;
+        _webhookSignatureSkipped?: boolean;
+      };
+      req._webhookSignatureSkipped = true;
+      const next = jest.fn() as NextFunction;
+
+      middleware.use(req, {} as Response, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT skip when _webhookSignatureSkipped is falsy", () => {
+      const req = createRequest() as Request & {
+        rawBody: Buffer;
+        _webhookSignatureSkipped?: boolean;
+      };
+      req._webhookSignatureSkipped = false;
+      const next = jest.fn() as NextFunction;
+
+      expect(() => middleware.use(req, {} as Response, next)).toThrow(
+        UnauthorizedException,
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("non-skipped routes", () => {
+    it("throws UnauthorizedException when no signature header is present", () => {
+      const req = createRequest();
+      expect(() => middleware.use(req, {} as Response, jest.fn())).toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it("calls next() when signature is valid (sha256= prefix)", () => {
+      const body = Buffer.from('{"event":"test"}');
+      const req = createRequest("sha256=" + sign(body));
+      (req as Request & { rawBody: Buffer }).rawBody = body;
+      const next = jest.fn() as NextFunction;
+      middleware.use(req, {} as Response, next);
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws ForbiddenException when signature is invalid", () => {
+      const req = createRequest(
+        "sha256=deadbeef00000000000000000000000000000000000000000000000000000000",
+      );
+      expect(() => middleware.use(req, {} as Response, jest.fn())).toThrow(
+        ForbiddenException,
+      );
+    });
+  });
+
+  describe("WebhookSignatureMiddleware provider secrets", () => {
+    it("warns when neither a default nor provider secret is configured", () => {
+      const warn = jest
+        .spyOn(Logger.prototype, "warn")
+        .mockImplementation(() => undefined);
+
+      new WebhookSignatureMiddleware(createConfig(), new Reflector());
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("All webhook requests will be rejected."),
+      );
+    });
+
+    it("logs configured providers and accepts a provider-only secret", () => {
+      process.env.WEBHOOK_SECRET_STRIPE = "stripe-secret";
+      const log = jest
+        .spyOn(Logger.prototype, "log")
+        .mockImplementation(() => undefined);
+      const warn = jest
+        .spyOn(Logger.prototype, "warn")
+        .mockImplementation(() => undefined);
+      const middleware = new WebhookSignatureMiddleware(
+        createConfig({ WEBHOOK_SECRET_STRIPE: "stripe-secret" }),
+        new Reflector(),
+      );
+      const next = jest.fn();
+
+      middleware.use(
+        signedRequest("/api/v1/webhooks/stripe", "stripe-secret"),
+        {} as Response,
+        next,
+      );
+
+      expect(log).toHaveBeenCalledWith(
+        "Provider-specific webhook secrets configured for: stripe",
+      );
+      expect(warn).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it("names an unknown provider when no matching or default secret exists", () => {
+      const middleware = new WebhookSignatureMiddleware(
+        createConfig(),
+        new Reflector(),
+      );
+      const request = signedRequest("/api/v1/webhooks/unknown", "unused");
+      let thrown: unknown;
+
+      try {
+        middleware.use(request, {} as Response, jest.fn());
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(UnauthorizedException);
+      if (thrown instanceof UnauthorizedException) {
+        expect(thrown.message).toContain('provider "unknown"');
+      }
+    });
+  });
+
+  it("accepts a valid HMAC-SHA256 signature and calls next", () => {
+    const req = createRequest(sign(rawBody));
+    const next = jest.fn() as NextFunction;
+
+    middleware.use(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
 });

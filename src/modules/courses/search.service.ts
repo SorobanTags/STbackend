@@ -43,6 +43,8 @@ export class SearchService {
           totalEnrollments: true,
           avgRating: true,
         },
+        // Order by totalEnrollments desc so the ranking step works on the
+        // most-relevant subset, not an arbitrary database page (issue #32).
         orderBy: [
           { totalEnrollments: 'desc' },
           { avgRating: 'desc' },
@@ -123,6 +125,8 @@ export class SearchService {
       }
     }
   }
+    }
+  }
 
   private addSuggestion(suggestions: Map<string, CourseSearchSuggestion>, suggestion: CourseSearchSuggestion) {
     const key = `${suggestion.type}:${suggestion.text.toLowerCase()}`;
@@ -140,6 +144,7 @@ export class SearchService {
         suggestions.set(key, { ...existing, text: canonicalText });
       }
     }
+    }
   }
 
   private normalizeQuery(query?: string) {
@@ -155,9 +160,11 @@ export class SearchService {
     const normalizedText = text.toLowerCase();
     if (normalizedText === query) return baseScore + 100;
     if (normalizedText.startsWith(query)) return baseScore + 50;
-    // Word-boundary match: query appears at the start of any word in the text (#37)
+    // Reward whole-word (word-boundary) matches above arbitrary mid-word hits
+    // so "java" in "Java basics" outranks "java" inside "javascript" (issue #37).
     const words = normalizedText.split(/[^a-z0-9]+/);
     if (words.some(word => word.startsWith(query))) return baseScore + 25;
+    if (normalizedText.includes(query)) return baseScore + 10;
     return baseScore;
   }
 }

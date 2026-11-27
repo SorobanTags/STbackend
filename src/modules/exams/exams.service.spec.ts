@@ -89,6 +89,28 @@ describe('ExamsService', () => {
       expect(res.reason).toContain('cooldown');
     });
 
+    it('should return cooldownEndsAt and positive remainingMinutes on cooldown branch', async () => {
+      mockPrisma.exam.findUnique.mockResolvedValue({
+        id: 'exam-1',
+        courseId: 'course-1',
+        cooldownHours: 24,
+      });
+      mockPrisma.enrollment.findUnique.mockResolvedValue({
+        progressPercent: 100,
+        status: 'COMPLETED',
+      });
+      const attemptedAt = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
+      mockPrisma.examAttempt.findFirst.mockResolvedValue({
+        passed: false,
+        attemptedAt,
+      });
+
+      const res = await service.checkEligibility('student-1', 'exam-1');
+      expect(res.eligible).toBe(false);
+      expect(res.cooldownEndsAt).toBeInstanceOf(Date);
+      expect(res.remainingMinutes).toBeGreaterThan(0);
+    });
+
     it('should return eligible if requirements are met', async () => {
       mockPrisma.exam.findUnique.mockResolvedValue({
         id: 'exam-1',
@@ -107,7 +129,105 @@ describe('ExamsService', () => {
   });
 
   describe('submitExam', () => {
+    const questions = [
+      { id: 'q1', points: 1, correctAnswer: [0] },
+      { id: 'q2', points: 1, correctAnswer: [1] },
+    ];
+
+    const setUpEligibleExam = () => {
+      mockPrisma.exam.findUnique.mockResolvedValue({
+        id: 'exam-1',
+        courseId: 'course-1',
+        passingScore: 70,
+        cooldownHours: 24,
+        questions,
+      });
+      mockPrisma.enrollment.findUnique.mockResolvedValue({
+        progressPercent: 100,
+        status: 'COMPLETED',
+      });
+      mockPrisma.examAttempt.findFirst.mockResolvedValue(null);
+    };
+
     it('should validate answers and pass exam if score >= passingScore', async () => {
+      setUpEligibleExam();
+      mockPrisma.examAttempt.create.mockImplementation(({ data }) => Promise.resolve({ id: 'attempt-1', ...data }));
+
+      const res = await service.submitExam('student-1', 'exam-1', {
+        answers: { q1: [0], q2: [1] },
+      });
+
+      expect(res.score).toBe(100);
+      expect(res.passed).toBe(true);
+    });
+
+    it('should throw ForbiddenException and never call examAttempt.create when student is ineligible', async () => {
+      mockPrisma.exam.findUnique.mockResolvedValue({
+        id: 'exam-1',
+        courseId: 'course-1',
+        passingScore: 70,
+        cooldownHours: 24,
+        questions: [],
+      });
+      mockPrisma.enrollment.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.submitExam('student-1', 'exam-1', { answers: {} }),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(mockPrisma.examAttempt.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects missing question IDs before creating an attempt', async () => {
+      setUpEligibleExam();
+
+      await expect(
+        service.submitExam('student-1', 'exam-1', {
+          answers: { q1: [0] },
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockPrisma.examAttempt.create).not.toHaveBeenCalled();
+    });
+
+      expect(mockPrisma.examAttempt.create).not.toHaveBeenCalled();
+    });
+
+    it('should record passed: true when score equals passingScore exactly', async () => {
+      // 1 out of 2 questions correct → 50 points; passingScore = 50
+      const questions = [
+        { id: 'q1', points: 1, correctAnswer: [0] },
+        { id: 'q2', points: 1, correctAnswer: [1] },
+      ];
+
+      mockPrisma.exam.findUnique.mockResolvedValue({
+        id: 'exam-1',
+        courseId: 'course-1',
+        passingScore: 50,
+        cooldownHours: 24,
+        questions,
+      });
+      mockPrisma.enrollment.findUnique.mockResolvedValue({
+        progressPercent: 100,
+        status: 'COMPLETED',
+      });
+      mockPrisma.examAttempt.findFirst.mockResolvedValue(null);
+      mockPrisma.examAttempt.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'attempt-1', ...data }),
+      );
+
+      const res = await service.submitExam('student-1', 'exam-1', {
+        answers: { q1: [0], q2: [99] }, // q1 correct, q2 wrong → score = 50
+      });
+
+      expect(res.score).toBe(50);
+      expect(res.passed).toBe(true);
+      expect(mockPrisma.examAttempt.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ passed: true }) }),
+      );
+    });
+
+    it('should record passed: false when score is below passingScore', async () => {
       const questions = [
         { id: 'q1', points: 1, correctAnswer: [0] },
         { id: 'q2', points: 1, correctAnswer: [1] },
@@ -125,14 +245,67 @@ describe('ExamsService', () => {
         status: 'COMPLETED',
       });
       mockPrisma.examAttempt.findFirst.mockResolvedValue(null);
-      mockPrisma.examAttempt.create.mockImplementation(({ data }) => Promise.resolve({ id: 'attempt-1', ...data }));
+      mockPrisma.examAttempt.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'attempt-1', ...data }),
+      );
 
       const res = await service.submitExam('student-1', 'exam-1', {
-        answers: { q1: [0], q2: [1] },
+        answers: { q1: [0], q2: [99] }, // q1 correct, q2 wrong → score = 50
       });
 
-      expect(res.score).toBe(100);
-      expect(res.passed).toBe(true);
+      expect(res.score).toBe(50);
+      expect(res.passed).toBe(false);
+      expect(mockPrisma.examAttempt.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ passed: false }) }),
+      );
+    });
+
+    it('rejects extra question IDs before creating an attempt', async () => {
+      setUpEligibleExam();
+
+      await expect(
+        service.submitExam('student-1', 'exam-1', {
+          answers: { q1: [0], q2: [1], q3: [0] },
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockPrisma.examAttempt.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects duplicate submitted question IDs before creating an attempt', async () => {
+      setUpEligibleExam();
+      const answers = { q1: [0], q2: [1] };
+      const actualObjectKeys = Object.keys;
+      const objectKeys = jest
+        .spyOn(Object, 'keys')
+        .mockImplementation((value) =>
+          value === answers ? ['q1', 'q1', 'q2'] : actualObjectKeys(value),
+        );
+
+      try {
+        await expect(
+          service.submitExam('student-1', 'exam-1', {
+            answers,
+          }),
+        ).rejects.toThrow(BadRequestException);
+      } finally {
+        objectKeys.mockRestore();
+      }
+
+      expect(mockPrisma.examAttempt.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects missing question IDs before creating an attempt', async () => {
+      setUpEligibleExam();
+
+      await expect(
+        service.submitExam('student-1', 'exam-1', {
+          answers: { q1: [0] },
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockPrisma.examAttempt.create).not.toHaveBeenCalled();
+    });
     });
   });
 

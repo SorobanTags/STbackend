@@ -1,16 +1,31 @@
 import {
-  Injectable,
-  NotFoundException,
   BadRequestException,
-  Logger,
   ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
 } from '@nestjs/common';
+import {
+  CourseStatus,
+  ReportCategory,
+  ReportStatus,
+  ReportTargetType,
+} from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CreateFlagDto } from './dto/create-flag.dto';
 import { ResolveFlagDto } from './dto/resolve-flag.dto';
-import { ReportStatus, ReportTargetType, CourseStatus, ReportCategory } from '@prisma/client';
 
-export const DEFAULT_UNPUBLISH_THRESHOLD = 3;
+const AUTO_UNPUBLISH_THRESHOLD = 3;
+
+const TERMINAL_REPORT_STATUSES: ReportStatus[] = [
+  ReportStatus.RESOLVED,
+  ReportStatus.DISMISSED,
+];
+
+export interface AutoUnpublishResult {
+  attempted: boolean;
+  applied: boolean;
+}
 
 @Injectable()
 export class ModerationService {
@@ -20,21 +35,21 @@ export class ModerationService {
 
   async createFlag(reporterId: string, dto: CreateFlagDto) {
     if (!Object.values(ReportCategory).includes(dto.category)) {
-      throw new BadRequestException(`Invalid flag category: ${dto.category}`);
+      throw new BadRequestException('Invalid report category');
     }
 
-    const existingFlag = await this.prisma.abuseReport.findFirst({
+    const existing = await this.prisma.abuseReport.findFirst({
       where: {
         reporterId,
         targetType: dto.targetType,
         targetId: dto.targetId,
-        status: { in: [ReportStatus.PENDING, ReportStatus.UNDER_REVIEW] },
+        status: ReportStatus.PENDING,
       },
     });
 
-    if (existingFlag) {
+    if (existing) {
       throw new ConflictException(
-        'A pending or under-review report already exists for this reporter and target.',
+        'You have already reported this content and it is pending review',
       );
     }
 
@@ -49,8 +64,7 @@ export class ModerationService {
       },
     });
 
-    // Check pending flags threshold for automatic unpublish/hide
-    const pendingReports = await this.prisma.abuseReport.findMany({
+    const reporters = await this.prisma.abuseReport.findMany({
       where: {
         targetType: dto.targetType,
         targetId: dto.targetId,
@@ -59,56 +73,48 @@ export class ModerationService {
       distinct: ['reporterId'],
       select: { reporterId: true },
     });
-    const pendingCount = pendingReports.length;
 
+    const pendingCount = reporters.length;
     let autoActionTaken = false;
-    if (pendingCount >= DEFAULT_UNPUBLISH_THRESHOLD) {
-      autoActionTaken = await this.handleAutoUnpublish(dto.targetType, dto.targetId);
+    let autoActionFailed = false;
+
+    if (pendingCount >= AUTO_UNPUBLISH_THRESHOLD) {
+      const result = await this.autoUnpublishTarget(
+        dto.targetType,
+        dto.targetId,
+      );
+      autoActionTaken = result.applied;
+      autoActionFailed = result.attempted && !result.applied;
     }
 
-    return {
-      report,
-      pendingCount,
-      autoActionTaken,
-    };
-  }
-
-  private async handleAutoUnpublish(targetType: ReportTargetType, targetId: string): Promise<boolean> {
-    try {
-      if (targetType === ReportTargetType.COURSE) {
-        const course = await this.prisma.course.findUnique({ where: { id: targetId } });
-        if (course && course.status !== CourseStatus.PAUSED) {
-          await this.prisma.course.update({
-            where: { id: targetId },
-            data: { status: CourseStatus.PAUSED },
-          });
-          this.logger.warn(`Course ${targetId} automatically paused due to flag threshold reach`);
-          return true;
-        }
-      } else if (targetType === ReportTargetType.COMMENT) {
-        const comment = await this.prisma.discussionComment.findUnique({ where: { id: targetId } });
-        if (comment && !comment.hidden) {
-          await this.prisma.discussionComment.update({
-            where: { id: targetId },
-            data: { hidden: true },
-          });
-          this.logger.warn(`Discussion comment ${targetId} automatically hidden due to flag threshold reach`);
-          return true;
-        }
-      }
-    } catch (err) {
-      this.logger.error(`Failed automatic unpublish for ${targetType} ${targetId}: ${err.message}`);
-    }
-    return false;
+    return { report, pendingCount, autoActionTaken, autoActionFailed };
   }
 
   async resolveFlag(flagId: string, adminId: string, dto: ResolveFlagDto) {
-    const flag = await this.prisma.abuseReport.findUnique({ where: { id: flagId } });
+    const flag = await this.prisma.abuseReport.findUnique({
+      where: { id: flagId },
+    });
+
     if (!flag) {
-      throw new NotFoundException(`Flag report with ID ${flagId} not found`);
+      throw new NotFoundException('Report not found');
     }
 
-    const updated = await this.prisma.abuseReport.update({
+    if (
+      flag.status !== ReportStatus.PENDING &&
+      flag.status !== ReportStatus.UNDER_REVIEW
+    ) {
+      throw new ConflictException(
+        'This report has already been resolved and cannot be updated',
+      );
+    }
+
+    if (!TERMINAL_REPORT_STATUSES.includes(dto.status)) {
+      throw new BadRequestException(
+        'Resolution status must be RESOLVED or DISMISSED',
+      );
+    }
+
+    return this.prisma.abuseReport.update({
       where: { id: flagId },
       data: {
         status: dto.status,
@@ -117,47 +123,64 @@ export class ModerationService {
         resolvedAt: new Date(),
       },
     });
-
-    this.logger.log(`Flag ${flagId} resolved by admin ${adminId} to status ${dto.status}`);
-    return updated;
   }
 
-  async getDashboardListing(query: {
-    status?: ReportStatus;
-    targetType?: ReportTargetType;
-    category?: ReportCategory;
-    page?: number;
-    limit?: number;
-  }) {
-    const page = query.page && query.page > 0 ? query.page : 1;
-    const limit = query.limit && query.limit > 0 ? query.limit : 10;
-    const skip = (page - 1) * limit;
+  private async autoUnpublishTarget(
+    targetType: ReportTargetType,
+    targetId: string,
+  ): Promise<AutoUnpublishResult> {
+    if (targetType === ReportTargetType.COURSE) {
+      const course = await this.prisma.course.findUnique({
+        where: { id: targetId },
+      });
 
-    const where: any = {};
-    if (query.status) where.status = query.status;
-    if (query.targetType) where.targetType = query.targetType;
-    if (query.category) where.category = query.category;
+      if (!course || course.status !== CourseStatus.ACTIVE) {
+        return { attempted: false, applied: false };
+      }
 
-    const [reports, total] = await Promise.all([
-      this.prisma.abuseReport.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          reporter: { select: { id: true, name: true, email: true } },
-          resolvedBy: { select: { id: true, name: true, email: true } },
-        },
-      }),
-      this.prisma.abuseReport.count({ where }),
-    ]);
+      try {
+        await this.prisma.course.update({
+          where: { id: targetId },
+          data: { status: CourseStatus.PAUSED },
+        });
 
-    return {
-      data: reports,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+        return { attempted: true, applied: true };
+      } catch (err) {
+        this.logger.error(
+          `Failed to auto-unpublish course ${targetId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return { attempted: true, applied: false };
+      }
+    }
+
+    if (targetType === ReportTargetType.COMMENT) {
+      const comment = await this.prisma.discussionComment.findUnique({
+        where: { id: targetId },
+      });
+
+      if (!comment) {
+        return { attempted: false, applied: false };
+      }
+
+      try {
+        await this.prisma.discussionComment.update({
+          where: { id: targetId },
+          data: { isHidden: true },
+        });
+
+        return { attempted: true, applied: true };
+      } catch (err) {
+        this.logger.error(
+          `Failed to auto-hide comment ${targetId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return { attempted: true, applied: false };
+      }
+    }
+
+    return { attempted: false, applied: false };
   }
 }

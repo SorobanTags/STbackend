@@ -2,8 +2,8 @@
 import {
   Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { assertCourseOwnership, loadCourseForOwnership, OwnershipUser } from '../../common/auth/course-ownership';
 
 @Injectable()
 export class LessonsService {
@@ -11,36 +11,7 @@ export class LessonsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  private async verifyCourseOwnership(
-    courseId: string,
-    user?: { id?: string; stellarAddress?: string; role?: string },
-  ) {
-    const course = await this.prisma.course.findUnique({
-      where: { id: courseId },
-      include: { instructor: true },
-    });
-
-    if (!course) {
-      throw new NotFoundException('Course not found');
-    }
-
-    if (user && user.role !== UserRole.ADMIN) {
-      const isOwner =
-        (user.stellarAddress && course.instructorAddress === user.stellarAddress) ||
-        (user.id && (course.instructorAddress === user.id || course.instructor?.id === user.id));
-
-      if (!isOwner) {
-        throw new ForbiddenException('You are not authorized to manage content for this course');
-      }
-    }
-
-    return course;
-  }
-
-  private async verifyModuleOwnership(
-    moduleId: string,
-    user?: { id?: string; stellarAddress?: string; role?: string },
-  ) {
+  private async verifyModuleOwnership(moduleId: string, user?: OwnershipUser) {
     const module = await this.prisma.courseModule.findUnique({
       where: { id: moduleId },
       include: {
@@ -54,16 +25,7 @@ export class LessonsService {
       throw new NotFoundException('Module not found');
     }
 
-    if (user && user.role !== UserRole.ADMIN) {
-      const course = module.course;
-      const isOwner =
-        (user.stellarAddress && course.instructorAddress === user.stellarAddress) ||
-        (user.id && (course.instructorAddress === user.id || course.instructor?.id === user.id));
-
-      if (!isOwner) {
-        throw new ForbiddenException('You are not authorized to manage content for this course');
-      }
-    }
+    assertCourseOwnership(module.course, user);
 
     return module;
   }
@@ -72,9 +34,9 @@ export class LessonsService {
     courseId: string,
     title: string,
     position: number,
-    user?: { id?: string; stellarAddress?: string; role?: string },
+    user?: OwnershipUser,
   ) {
-    await this.verifyCourseOwnership(courseId, user);
+    await loadCourseForOwnership(this.prisma, courseId, user);
     return this.prisma.courseModule.create({
       data: { courseId, title, position },
     });
@@ -94,33 +56,36 @@ export class LessonsService {
       position: number;
       isFree?: boolean;
     },
-    user?: { id?: string; stellarAddress?: string; role?: string },
+    user?: OwnershipUser,
   ) {
     const module = await this.verifyModuleOwnership(moduleId, user);
 
-    const lesson = await this.prisma.lesson.create({
-      data: {
-        moduleId,
-        title:         data.title,
-        description:   data.description,
-        type:          data.type as any ?? 'VIDEO',
-        videoUrl:      data.videoUrl,
-        videoDuration: data.videoDuration,
-        thumbnailUrl:  data.thumbnailUrl,
-        content:       data.content,
-        resourceUrl:   data.resourceUrl,
-        position:      data.position,
-        isFree:        data.isFree ?? false,
-      },
-    });
+    // Insert and counter increment commit together so totalLessons cannot drift
+    return this.prisma.$transaction(async (tx) => {
+      const lesson = await tx.lesson.create({
+        data: {
+          moduleId,
+          title:         data.title,
+          description:   data.description,
+          type:          data.type as any ?? 'VIDEO',
+          videoUrl:      data.videoUrl,
+          videoDuration: data.videoDuration,
+          thumbnailUrl:  data.thumbnailUrl,
+          content:       data.content,
+          resourceUrl:   data.resourceUrl,
+          position:      data.position,
+          isFree:        data.isFree ?? false,
+        },
+      });
 
-    // Update totalLessons on the course
-    await this.prisma.course.update({
-      where: { id: module.courseId },
-      data: { totalLessons: { increment: 1 } },
-    });
+      // Update totalLessons on the course
+      await tx.course.update({
+        where: { id: module.courseId },
+        data: { totalLessons: { increment: 1 } },
+      });
 
-    return lesson;
+      return lesson;
+    });
   }
 
   async findLesson(lessonId: string) {

@@ -41,15 +41,32 @@ export class StellarService implements OnModuleInit {
   constructor(private readonly config: ConfigService) {}
 
   async onModuleInit() {
-    const rpcUrl     = this.config.get<string>('STELLAR_RPC_URL');
+    const rpcUrl      = this.config.get<string>('STELLAR_RPC_URL');
     const networkName = this.config.get<string>('STELLAR_NETWORK', 'testnet');
+    const contractId  = this.config.get<string>('SOROBANLARD_CONTRACT_ID');
+
+    if (!rpcUrl || rpcUrl.trim() === '') {
+      throw new Error('STELLAR_RPC_URL is required but was not configured');
+    }
+    if (!contractId || contractId.trim() === '') {
+      throw new Error(
+        'SOROBANLARD_CONTRACT_ID is required but was not configured',
+      );
+    }
+
+    const normalisedNetwork = (networkName ?? '').trim().toLowerCase();
+    if (normalisedNetwork !== 'mainnet' && normalisedNetwork !== 'testnet') {
+      throw new Error(
+        `Invalid STELLAR_NETWORK "${networkName}": expected "mainnet" or "testnet"`,
+      );
+    }
 
     this.rpcClient = new SorobanRpc.Server(rpcUrl, { allowHttp: true });
-    this.contractId = this.config.get<string>('SOROBANLARD_CONTRACT_ID');
+    this.contractId = contractId;
     this.networkPassphrase =
-      networkName === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+      normalisedNetwork === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
 
-    this.logger.log(`Stellar connected to ${networkName} (${rpcUrl})`);
+    this.logger.log(`Stellar connected to ${normalisedNetwork} (${rpcUrl})`);
     this.logger.log(`SorobanLard contract: ${this.contractId}`);
   }
 
@@ -109,24 +126,19 @@ export class StellarService implements OnModuleInit {
   async fetchContractEvents(
     startLedger: number,
   ): Promise<SorobanRpc.Api.EventResponse[]> {
-    try {
-      const result = await this.withRetry('fetchContractEvents', () =>
-        this.rpcClient.getEvents({
-          startLedger,
-          filters: [
-            {
-              type: 'contract',
-              contractIds: [this.contractId],
-            },
-          ],
-          limit: 100,
-        }),
-      );
-      return result.events ?? [];
-    } catch (error) {
-      this.logger.error(`Failed to fetch events from ledger ${startLedger}`, error.message);
-      return [];
-    }
+    const result = await this.withRetry('fetchContractEvents', () =>
+      this.rpcClient.getEvents({
+        startLedger,
+        filters: [
+          {
+            type: 'contract',
+            contractIds: [this.contractId],
+          },
+        ],
+        limit: 100,
+      }),
+    );
+    return result.events ?? [];
   }
 
   // ----------------------------------------------------------
@@ -169,7 +181,10 @@ export class StellarService implements OnModuleInit {
       }
       return null;
     } catch (error) {
-      this.logger.error(`simulateCall(${method}) failed`, error.message);
+      this.logger.error(
+        `simulateCall(${method}) failed`,
+        error instanceof Error ? error.message : String(error),
+      );
       throw error;
     }
   }
@@ -214,7 +229,10 @@ export class StellarService implements OnModuleInit {
         successful: result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS,
       };
     } catch (error) {
-      this.logger.error(`getTransactionStatus(${txHash}) failed`, error.message);
+      this.logger.error(
+        `getTransactionStatus(${txHash}) failed`,
+        error instanceof Error ? error.message : String(error),
+      );
       return null;
     }
   }

@@ -1,5 +1,5 @@
 // invoices.service.ts
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
@@ -22,7 +22,8 @@ export class InvoicesService {
    */
   async generateForEnrollment(enrollmentId: string) {
     const existing = await this.prisma.invoice.findUnique({ where: { enrollmentId } });
-    if (existing) return existing;
+    // Only a fully delivered invoice short-circuits; an unsent one is retried below.
+    if (existing?.emailSent) return existing;
 
     const enrollment = await this.prisma.enrollment.findUnique({
       where: { id: enrollmentId },
@@ -32,24 +33,34 @@ export class InvoicesService {
 
     await this.validatePayment(enrollment.txHash, Number(enrollment.amountPaid));
 
-    const invoice = await this.prisma.invoice.create({
-      data: {
-        enrollmentId: enrollment.id,
-        studentId: enrollment.studentId,
-        courseId: enrollment.courseId,
-        amount: enrollment.amountPaid,
-        txHash: enrollment.txHash,
-      },
-    });
+    // Reuse the row from a previous failed attempt; the PDF needs its invoiceNumber, so create comes before render.
+    const invoice =
+      existing ??
+      (await this.prisma.invoice.create({
+        data: {
+          enrollmentId: enrollment.id,
+          studentId: enrollment.studentId,
+          courseId: enrollment.courseId,
+          amount: enrollment.amountPaid,
+          txHash: enrollment.txHash,
+        },
+      }));
 
-    const pdfBuffer = await this.renderInvoicePdf({
-      invoiceNumber: invoice.invoiceNumber,
-      studentName: enrollment.student.name ?? enrollment.student.stellarAddress,
-      courseTitle: enrollment.course.title,
-      amount: Number(enrollment.amountPaid),
-      txHash: enrollment.txHash,
-      issuedAt: invoice.issuedAt,
-    });
+    let pdfBuffer: Buffer;
+    try {
+      pdfBuffer = await this.renderInvoicePdf({
+        invoiceNumber: invoice.invoiceNumber,
+        studentName: enrollment.student.name ?? enrollment.student.stellarAddress,
+        courseTitle: enrollment.course.title,
+        amount: Number(enrollment.amountPaid),
+        txHash: enrollment.txHash,
+        issuedAt: invoice.issuedAt,
+      });
+    } catch (error) {
+      // Roll back the new row so a retry starts clean. Existing rows are kept for retry.
+      if (!existing) await this.prisma.invoice.delete({ where: { id: invoice.id } });
+      throw error;
+    }
 
     if (enrollment.student.email) {
       const sent = await this.notifications.sendInvoiceEmail(
@@ -70,6 +81,26 @@ export class InvoicesService {
     return invoice;
   }
 
+  async findOne(id: string, requesterId: string, isAdmin: boolean) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    this.assertCanView(invoice.studentId, requesterId, isAdmin);
+    return invoice;
+  }
+
+  async findByEnrollment(enrollmentId: string, requesterId: string, isAdmin: boolean) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { enrollmentId } });
+    if (!invoice) throw new NotFoundException('Invoice not found for this enrollment');
+    this.assertCanView(invoice.studentId, requesterId, isAdmin);
+    return invoice;
+  }
+
+  private assertCanView(studentId: string, requesterId: string, isAdmin: boolean) {
+    if (!isAdmin && studentId !== requesterId) {
+      throw new ForbiddenException('You can only view your own invoices');
+    }
+  }
+
   /**
    * Confirms the on-chain transaction backing the payment actually succeeded
    * before an invoice is issued for it.
@@ -81,7 +112,10 @@ export class InvoicesService {
     if (!txHash) return;
 
     const txStatus = await this.stellar.getTransactionStatus(txHash);
-    if (txStatus && !txStatus.successful) {
+    if (!txStatus) {
+      throw new BadRequestException('Cannot invoice a payment whose on-chain transaction could not be found');
+    }
+    if (!txStatus.successful) {
       throw new BadRequestException('Cannot invoice a payment whose on-chain transaction did not succeed');
     }
   }

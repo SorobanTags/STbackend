@@ -72,12 +72,12 @@ export class SmsService {
       throw new BadRequestException(`Unsupported country code: ${countryCode}`);
     }
 
-    const trimmed = phoneNumber?.trim();
-    if (!trimmed || !pattern.test(trimmed)) {
+    const normalized = phoneNumber?.trim().replace(/[\s\-()]/g, '');
+    if (!normalized || !pattern.test(normalized)) {
       throw new BadRequestException(`Invalid phone number format for country ${country}`);
     }
 
-    return this.toE164(trimmed, country);
+    return this.toE164(normalized, country);
   }
 
   renderTemplate(templateKey: SmsTemplateKey, data: Record<string, string | number> = {}): string {
@@ -86,9 +86,20 @@ export class SmsService {
       throw new BadRequestException(`Unknown SMS template: ${templateKey}`);
     }
 
-    return template.replace(/{{\s*(\w+)\s*}}/g, (_match, key) =>
-      data[key] !== undefined ? String(data[key]) : `{{${key}}}`,
-    );
+    const missing: string[] = [];
+    const rendered = template.replace(/{{\s*(\w+)\s*}}/g, (_match, key) => {
+      if (data[key] === undefined) {
+        missing.push(key);
+        return _match;
+      }
+      return String(data[key]);
+    });
+
+    if (missing.length > 0) {
+      throw new BadRequestException('Missing SMS template values: ' + missing.join(', '));
+    }
+
+    return rendered;
   }
 
   async sendSms(params: SendSmsParams) {
@@ -133,11 +144,10 @@ export class SmsService {
         },
       });
     } catch (error) {
-      this.logger.error(`SMS send failed to ${normalizedPhone}`, error.message);
-      return this.prisma.smsMessage.update({
-        where: { id: smsMessage.id },
-        data: { status: SmsStatus.FAILED, failureReason: error.message },
-      });
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.error(`SMS send failed to ${normalizedPhone}`, reason);
+      await this.markFailed(smsMessage.id, reason);
+      throw error;
     }
   }
 
@@ -169,6 +179,13 @@ export class SmsService {
     });
 
     return { acknowledged: true };
+  }
+
+  private markFailed(id: string, reason: string) {
+    return this.prisma.smsMessage.update({
+      where: { id },
+      data: { status: SmsStatus.FAILED, failureReason: reason, sentAt: null },
+    });
   }
 
   private toE164(phoneNumber: string, country: string): string {

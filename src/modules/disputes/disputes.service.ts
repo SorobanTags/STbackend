@@ -1,12 +1,21 @@
 import {
   Injectable, NotFoundException, ForbiddenException,
-  BadRequestException, Logger,
+  BadRequestException, ConflictException, Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { DisputeStatus, DisputeReferenceType, NotificationType } from '@prisma/client';
+import {
+  DisputeStatus, DisputeReferenceType, NotificationType, AuditAction, AuditTargetType,
+} from '@prisma/client';
 import { FileDisputeDto } from './dto/file-dispute.dto';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
+import { MAX_PAGE_SIZE } from '../../common/dto/pagination-query.dto';
+
+const DISPUTE_AUDIT_ACTIONS: Partial<Record<DisputeStatus, AuditAction>> = {
+  [DisputeStatus.RESOLVED]: AuditAction.DISPUTE_RESOLVED,
+  [DisputeStatus.REJECTED]: AuditAction.DISPUTE_REJECTED,
+  [DisputeStatus.CLOSED]: AuditAction.DISPUTE_CLOSED,
+};
 
 @Injectable()
 export class DisputesService {
@@ -53,6 +62,7 @@ export class DisputesService {
     limit = 20,
     status?: DisputeStatus,
   ) {
+    ({ page, limit } = this.normalisePagination(page, limit));
     const where: any = {};
     if (status) where.status = status;
 
@@ -88,6 +98,7 @@ export class DisputesService {
 
   /** Get disputes filed by the authenticated student */
   async findMyDisputes(studentId: string, page = 1, limit = 20) {
+    ({ page, limit } = this.normalisePagination(page, limit));
     const [disputes, total] = await this.prisma.$transaction([
       this.prisma.dispute.findMany({
         where: { filedById: studentId },
@@ -101,7 +112,7 @@ export class DisputesService {
       this.prisma.dispute.count({ where: { filedById: studentId } }),
     ]);
 
-    return { data: disputes, meta: { total, page, limit } };
+    return { data: disputes, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   // ----------------------------------------------------------
@@ -115,10 +126,16 @@ export class DisputesService {
       throw new BadRequestException('Only OPEN disputes can be moved to UNDER_REVIEW');
     }
 
-    return this.prisma.dispute.update({
-      where: { id },
+    // Conditional on the observed status so a concurrent admin action loses instead of overwriting
+    const { count } = await this.prisma.dispute.updateMany({
+      where: { id, status: dispute.status },
       data: { status: DisputeStatus.UNDER_REVIEW },
     });
+    if (count === 0) {
+      throw new ConflictException('Dispute was modified concurrently; reload and retry');
+    }
+
+    return this.findOne(id);
   }
 
   // ----------------------------------------------------------
@@ -135,15 +152,35 @@ export class DisputesService {
       );
     }
 
-    const updated = await this.prisma.dispute.update({
-      where: { id },
-      data: {
-        status: dto.status,
-        adminNotes: dto.adminNotes,
-        resolvedById: adminId,
-        resolvedAt: new Date(),
-      },
-    });
+    // Conditional on the observed status so a concurrent admin action loses instead of overwriting
+    const auditAction = DISPUTE_AUDIT_ACTIONS[dto.status];
+    const [count] = await this.prisma.$transaction([
+      this.prisma.dispute.updateMany({
+        where: { id, status: dispute.status },
+        data: {
+          status: dto.status,
+          adminNotes: dto.adminNotes,
+          resolvedById: adminId,
+          resolvedAt: new Date(),
+        },
+      }),
+      ...(auditAction
+        ? [this.prisma.adminAuditLog.create({
+            data: {
+              actorId: adminId,
+              action: auditAction,
+              targetType: AuditTargetType.DISPUTE,
+              targetId: id,
+              metadata: { from: dispute.status, to: dto.status, adminNotes: dto.adminNotes },
+            },
+          })]
+        : []),
+    ]);
+    if (count === 0) {
+      throw new ConflictException('Dispute was modified concurrently; reload and retry');
+    }
+
+    const updated = await this.findOne(id);
 
     await this.notifications.notifyUser(
       dispute.filedById,
@@ -172,9 +209,23 @@ export class DisputesService {
   // HELPERS
   // ----------------------------------------------------------
 
+  /** Rejects bad page/limit before they reach Prisma (skip/take). */
+  private normalisePagination(page: number, limit: number) {
+    const p = Number(page);
+    const l = Number(limit);
+    if (!Number.isInteger(p) || p < 1) {
+      throw new BadRequestException('page must be an integer >= 1');
+    }
+    if (!Number.isInteger(l) || l < 1 || l > MAX_PAGE_SIZE) {
+      throw new BadRequestException(`limit must be an integer between 1 and ${MAX_PAGE_SIZE}`);
+    }
+    return { page: p, limit: l };
+  }
+
   /**
-   * Ensures the referenced enrollment or payment belongs to the student
-   * before allowing them to file a dispute.
+   * Ensures the referenced record belongs to the student before allowing
+   * them to file a dispute. Every DisputeReferenceType value must have an
+   * ownership check here — this is the only guard on the student write path.
    */
   private async validateReference(
     studentId: string,
@@ -205,6 +256,20 @@ export class DisputesService {
         );
       }
       return enrollment;
+    }
+
+    // ASSIGNMENT — referenceId is an assignment id
+    if (referenceType === DisputeReferenceType.ASSIGNMENT) {
+      const assignment = await this.prisma.assignment.findUnique({
+        where: { id: referenceId },
+      });
+      if (!assignment) {
+        throw new NotFoundException(`Assignment ${referenceId} not found`);
+      }
+      if (assignment.studentId !== studentId) {
+        throw new ForbiddenException('You can only dispute your own assignments');
+      }
+      return assignment;
     }
 
     throw new BadRequestException('Invalid reference type');

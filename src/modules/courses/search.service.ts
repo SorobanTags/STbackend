@@ -1,5 +1,5 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { CourseStatus } from '@prisma/client';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Prisma, CourseStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 export interface CourseSearchSuggestion {
@@ -15,17 +15,17 @@ export class SearchService {
   private readonly minQueryLength = 2;
   private readonly defaultLimit = 10;
   private readonly maxLimit = 25;
+  private readonly logger = new Logger(SearchService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
   async autocomplete(query: string, requestedLimit?: number) {
     const normalizedQuery = this.normalizeQuery(query);
-    if (normalizedQuery.length < this.minQueryLength) {
-      throw new BadRequestException(`Search query must be at least ${this.minQueryLength} characters long`);
-    }
-
     const limit = this.normalizeLimit(requestedLimit);
-    await this.trackSearchTerm(normalizedQuery);
+
+    if (normalizedQuery.length < this.minQueryLength) {
+      return { data: [], meta: { query: normalizedQuery, limit, minQueryLength: this.minQueryLength, total: 0 } };
+    }
 
     const [courses, popularTerms] = await Promise.all([
       this.prisma.course.findMany({
@@ -45,10 +45,14 @@ export class SearchService {
         },
         // Order by totalEnrollments desc so the ranking step works on the
         // most-relevant subset, not an arbitrary database page (issue #32).
-        orderBy: [{ totalEnrollments: 'desc' }, { avgRating: 'desc' }],
+        orderBy: [
+          { totalEnrollments: 'desc' },
+          { avgRating: 'desc' },
+          { id: 'asc' },
+        ],
         take: limit * 2,
       }),
-      (this.prisma as any).courseSearchTerm.findMany({
+      this.prisma.courseSearchTerm.findMany({
         where: { term: { contains: normalizedQuery, mode: 'insensitive' } },
         orderBy: [{ searchCount: 'desc' }, { updatedAt: 'desc' }],
         take: limit,
@@ -100,39 +104,46 @@ export class SearchService {
     };
   }
 
-  private async trackSearchTerm(term: string) {
+  async recordSearchTerm(term: string): Promise<void> {
+    const normalizedTerm = this.normalizeQuery(term);
+    if (normalizedTerm.length < this.minQueryLength) return;
     try {
       await (this.prisma as any).courseSearchTerm.upsert({
-        where: { term },
-        create: { term, searchCount: 1 },
+        where: { term: normalizedTerm },
+        create: { term: normalizedTerm, searchCount: 1 },
         update: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
       });
-    } catch (err: unknown) {
-      // A unique-constraint violation means a concurrent request inserted the
-      // same term between our WHERE check and our CREATE.  Retry once as an
-      // update-only path instead of letting the error surface to the caller
-      // (issue #31).
-      const isUniqueViolation =
-        err instanceof Error && (err as any).code === 'P2002';
-      if (!isUniqueViolation) throw err;
-      await (this.prisma as any).courseSearchTerm.update({
-        where: { term },
-        data: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
-      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        this.logger.debug(`recordSearchTerm P2002 race for term "${normalizedTerm}", falling back to update`);
+        await (this.prisma as any).courseSearchTerm.update({
+          where: { term: normalizedTerm },
+          data: { searchCount: { increment: 1 }, lastSearchedAt: new Date() },
+        });
+      } else {
+        throw err;
+      }
+    }
+  }
     }
   }
 
   private addSuggestion(suggestions: Map<string, CourseSearchSuggestion>, suggestion: CourseSearchSuggestion) {
     const key = `${suggestion.type}:${suggestion.text.toLowerCase()}`;
     const existing = suggestions.get(key);
-    if (!existing || suggestion.rank > existing.rank) {
-      // Normalise to title-case so deduplication always produces consistent
-      // output regardless of which raw casing was seen first (issue #38).
-      const normalizedText = suggestion.text
-        .split(' ')
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-        .join(' ');
-      suggestions.set(key, { ...suggestion, text: normalizedText });
+    if (!existing) {
+      suggestions.set(key, suggestion);
+    } else {
+      // Choose canonical text deterministically (rank-independent) by picking the
+      // lexicographically earlier text, so the casing does not vary with input order (#38).
+      const canonicalText = suggestion.text < existing.text ? suggestion.text : existing.text;
+      if (suggestion.rank > existing.rank) {
+        suggestions.set(key, { ...suggestion, text: canonicalText });
+      } else if (canonicalText !== existing.text) {
+        // Rank does not change but we still adopt the canonical casing
+        suggestions.set(key, { ...existing, text: canonicalText });
+      }
+    }
     }
   }
 
@@ -141,8 +152,8 @@ export class SearchService {
   }
 
   private normalizeLimit(limit?: number) {
-    const numericLimit = Number(limit) || this.defaultLimit;
-    return Math.min(Math.max(Math.floor(numericLimit), 1), this.maxLimit);
+    // limit is already validated by AutocompleteQueryDto; fall back to default if absent.
+    return limit ?? this.defaultLimit;
   }
 
   private rankText(text: string, query: string, baseScore: number) {
@@ -151,8 +162,8 @@ export class SearchService {
     if (normalizedText.startsWith(query)) return baseScore + 50;
     // Reward whole-word (word-boundary) matches above arbitrary mid-word hits
     // so "java" in "Java basics" outranks "java" inside "javascript" (issue #37).
-    const wordBoundaryRe = new RegExp(`\\b${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
-    if (wordBoundaryRe.test(normalizedText)) return baseScore + 25;
+    const words = normalizedText.split(/[^a-z0-9]+/);
+    if (words.some(word => word.startsWith(query))) return baseScore + 25;
     if (normalizedText.includes(query)) return baseScore + 10;
     return baseScore;
   }

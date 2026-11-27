@@ -2,10 +2,10 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { assertCourseOwnership, OwnershipUser } from '../../common/auth/course-ownership';
 import { CreateQuestionDto, UpdateQuestionDto, ReorderQuestionsDto } from './dto/create-question.dto';
 import { QuestionType, UserRole } from '@prisma/client';
 
@@ -71,7 +71,7 @@ export class QuizzesService {
   /**
    * Helper to verify instructor owns the course that owns the lesson, or user is admin.
    */
-  private async verifyLessonOwnership(lessonId: string, userId: string, role: string) {
+  private async verifyLessonOwnership(lessonId: string, user: OwnershipUser | undefined) {
     const lesson = await this.prisma.lesson.findUnique({
       where: { id: lessonId },
       include: {
@@ -89,12 +89,11 @@ export class QuizzesService {
       throw new NotFoundException('Lesson not found');
     }
 
-    if (role !== UserRole.ADMIN) {
-      const course = lesson.module.course;
-      if (course.instructorAddress !== userId && course.instructor?.id !== userId) {
-        throw new ForbiddenException('You are not authorized to manage questions for this course');
-      }
-    }
+    assertCourseOwnership(
+      lesson.module.course,
+      user,
+      'You are not authorized to manage questions for this course',
+    );
 
     return lesson;
   }
@@ -105,10 +104,9 @@ export class QuizzesService {
   async createQuestion(
     lessonId: string,
     dto: CreateQuestionDto,
-    userId: string,
-    userRole: string,
+    user: OwnershipUser,
   ) {
-    await this.verifyLessonOwnership(lessonId, userId, userRole);
+    await this.verifyLessonOwnership(lessonId, user);
     this.validateQuestionData(dto.type, dto.options, dto.correctAnswer);
 
     return this.prisma.quizQuestion.create({
@@ -176,11 +174,10 @@ export class QuizzesService {
   async updateQuestion(
     id: string,
     dto: UpdateQuestionDto,
-    userId: string,
-    userRole: string,
+    user: OwnershipUser,
   ) {
     const existing = await this.getQuestionById(id);
-    await this.verifyLessonOwnership(existing.lessonId, userId, userRole);
+    await this.verifyLessonOwnership(existing.lessonId, user);
 
     const targetType = dto.type ?? existing.type;
     const targetOptions = dto.options ?? (existing.options as string[] | undefined);
@@ -205,9 +202,9 @@ export class QuizzesService {
   /**
    * Delete a question.
    */
-  async deleteQuestion(id: string, userId: string, userRole: string) {
+  async deleteQuestion(id: string, user: OwnershipUser) {
     const existing = await this.getQuestionById(id);
-    await this.verifyLessonOwnership(existing.lessonId, userId, userRole);
+    await this.verifyLessonOwnership(existing.lessonId, user);
 
     return this.prisma.quizQuestion.delete({
       where: { id },
@@ -220,10 +217,9 @@ export class QuizzesService {
   async reorderQuestions(
     lessonId: string,
     dto: ReorderQuestionsDto,
-    userId: string,
-    userRole: string,
+    user: OwnershipUser,
   ) {
-    await this.verifyLessonOwnership(lessonId, userId, userRole);
+    await this.verifyLessonOwnership(lessonId, user);
 
     const updatePromises = dto.questionOrders.map((item) =>
       this.prisma.quizQuestion.updateMany({

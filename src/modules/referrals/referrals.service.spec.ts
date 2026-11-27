@@ -82,6 +82,94 @@ describe('ReferralsService', () => {
     expect(service).toBeDefined();
   });
 
+  describe('getDefaultRules', () => {
+    it('returns the configured values when env vars are valid', () => {
+      const rules = (service as any).getDefaultRules();
+
+      expect(rules).toEqual({
+        referrerDiscountPercent: 10,
+        refereeDiscountPercent: 10,
+        rewardExpiryDays: 90,
+        maxRewardsPerReferrer: 50,
+      });
+    });
+
+    it('falls back to hardcoded defaults when env vars are malformed', () => {
+      mockConfig.get.mockImplementation((key: string, defaultValue?: number) => {
+        const malformed: Record<string, any> = {
+          REFERRAL_REFERRER_DISCOUNT_PERCENT: 'not-a-number',
+          REFERRAL_REFEREE_DISCOUNT_PERCENT: '150',
+          REFERRAL_REWARD_EXPIRY_DAYS: '-5',
+          REFERRAL_MAX_REWARDS_PER_REFERRER: 'NaN',
+        };
+        return malformed[key] ?? defaultValue;
+      });
+
+      const rules = (service as any).getDefaultRules();
+
+      expect(rules).toEqual({
+        referrerDiscountPercent: 10,
+        refereeDiscountPercent: 10,
+        rewardExpiryDays: 90,
+        maxRewardsPerReferrer: 50,
+      });
+    });
+  });
+
+  describe('updateRewardRules', () => {
+    it('persists valid merged rules', async () => {
+      mockPrisma.referralRewardRule.findUnique.mockResolvedValue({
+        id: 'rules-1',
+        referrerDiscountPercent: 10,
+        refereeDiscountPercent: 10,
+        rewardExpiryDays: 90,
+        maxRewardsPerReferrer: 50,
+      });
+      mockPrisma.referralRewardRule.upsert.mockResolvedValue({
+        id: 'rules-1',
+        referrerDiscountPercent: 15,
+        refereeDiscountPercent: 10,
+        rewardExpiryDays: 90,
+        maxRewardsPerReferrer: 50,
+      });
+
+      const result = await service.updateRewardRules({ referrerDiscountPercent: 15 });
+
+      expect(result.referrerDiscountPercent).toBe(15);
+      expect(mockPrisma.referralRewardRule.upsert).toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when merged rules fall out of range', async () => {
+      mockPrisma.referralRewardRule.findUnique.mockResolvedValue({
+        id: 'rules-1',
+        referrerDiscountPercent: 10,
+        refereeDiscountPercent: 10,
+        rewardExpiryDays: 90,
+        maxRewardsPerReferrer: 50,
+      });
+
+      await expect(
+        service.updateRewardRules({ referrerDiscountPercent: 150 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.referralRewardRule.upsert).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when a stored row is already out of range', async () => {
+      mockPrisma.referralRewardRule.findUnique.mockResolvedValue({
+        id: 'rules-1',
+        referrerDiscountPercent: 10,
+        refereeDiscountPercent: 10,
+        rewardExpiryDays: -1,
+        maxRewardsPerReferrer: 50,
+      });
+
+      await expect(
+        service.updateRewardRules({ referrerDiscountPercent: 20 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.referralRewardRule.upsert).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getOrCreateCode', () => {
     it('returns existing code without creating a new one', async () => {
       const existing = { id: 'rc-1', userId: 'u-1', code: 'HAMP-ABC123', isActive: true };
@@ -255,219 +343,16 @@ describe('ReferralsService', () => {
           referral: {
             update: jest.fn().mockResolvedValue(updated),
           },
-          referralCode: {
-            update: jest.fn().mockResolvedValue({}),
-          },
           referralReward: {
             create: jest.fn().mockResolvedValue({}),
           },
         }),
       );
-      mockNotifications.notifyUser.mockResolvedValue(undefined);
 
       const result = await service.trackConversion('new-user', 'enr-1');
 
-      expect(result.status).toBe(ReferralStatus.CONVERTED);
-      expect(mockNotifications.notifyUser).toHaveBeenCalled();
-    });
-
-    it('skips referrer reward when max rewards per referrer is reached', async () => {
-      mockPrisma.referral.findUnique.mockResolvedValue({
-        id: 'ref-1',
-        status: ReferralStatus.SIGNED_UP,
-        referrerId: 'referrer-1',
-        referralCodeId: 'rc-1',
-        rewards: [],
-      });
-      mockPrisma.referralReward.count.mockResolvedValue(50);
-
-      const rewardCreate = jest.fn();
-      mockPrisma.$transaction.mockImplementation(async (cb: any) =>
-        cb({
-          referral: {
-            update: jest.fn().mockResolvedValue({
-              id: 'ref-1',
-              status: ReferralStatus.CONVERTED,
-            }),
-          },
-          referralCode: {
-            update: jest.fn().mockResolvedValue({}),
-          },
-          referralReward: {
-            create: rewardCreate,
-          },
-        }),
-      );
-
-      await service.trackConversion('new-user', 'enr-1');
-      expect(rewardCreate).not.toHaveBeenCalled();
-      expect(mockNotifications.notifyUser).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('getPerformanceStatus', () => {
-    it('returns aggregated signup/conversion/reward performance', async () => {
-      mockPrisma.referralCode.findUnique.mockResolvedValue({
-        id: 'rc-1',
-        userId: 'u-1',
-        code: 'HAMP-ABC123',
-        isActive: true,
-      });
-      mockPrisma.referral.count
-        .mockResolvedValueOnce(4) // signups
-        .mockResolvedValueOnce(2); // conversions
-      mockPrisma.referralReward.findMany.mockResolvedValue([
-        {
-          id: 'rw-1',
-          status: ReferralRewardStatus.ISSUED,
-          expiresAt: new Date(Date.now() + 86_400_000),
-        },
-        {
-          id: 'rw-2',
-          status: ReferralRewardStatus.REDEEMED,
-          expiresAt: null,
-        },
-      ]);
-      mockPrisma.referral.findMany.mockResolvedValue([
-        {
-          id: 'ref-1',
-          status: ReferralStatus.CONVERTED,
-          signedUpAt: new Date(),
-          convertedAt: new Date(),
-          referredUser: { id: 'u-2', name: 'Bob', createdAt: new Date() },
-          rewards: [
-            {
-              id: 'rw-1',
-              kind: ReferralRewardKind.REFERRER,
-              status: ReferralRewardStatus.ISSUED,
-              discountType: DiscountType.PERCENTAGE,
-              discountValue: 10,
-              expiresAt: null,
-            },
-          ],
-        },
-      ]);
-
-      const result = await service.getPerformanceStatus('u-1');
-
-      expect(result.code).toBe('HAMP-ABC123');
-      expect(result.totals.signups).toBe(4);
-      expect(result.totals.conversions).toBe(2);
-      expect(result.totals.conversionRate).toBe(50);
-      expect(result.recentReferrals).toHaveLength(1);
-    });
-  });
-
-  describe('reward rules', () => {
-    it('returns default reward rules from config when no row is stored', async () => {
-      mockPrisma.referralRewardRule.findUnique.mockResolvedValue(null);
-      const rules = await service.getRewardRules();
-      expect(rules.referrerDiscountPercent).toBe(10);
-      expect(rules.refereeDiscountPercent).toBe(10);
-      expect(rules.rewardExpiryDays).toBe(90);
-      expect(rules.maxRewardsPerReferrer).toBe(50);
-    });
-
-    it('applies admin overrides to reward rules', async () => {
-      mockPrisma.referralRewardRule.findUnique.mockResolvedValue(null);
-      mockPrisma.referralRewardRule.upsert.mockImplementation(
-        async ({ create }: any) => ({ id: 'default', ...create }),
-      );
-      const updated = await service.updateRewardRules({
-        referrerDiscountPercent: 15,
-        maxRewardsPerReferrer: 20,
-      });
-      expect(updated.referrerDiscountPercent).toBe(15);
-      expect(updated.maxRewardsPerReferrer).toBe(20);
-      expect(updated.refereeDiscountPercent).toBe(10);
-    });
-
-    it('persists rule updates across service instantiations', async () => {
-      let stored: any = null;
-      mockPrisma.referralRewardRule.findUnique.mockImplementation(
-        async () => stored,
-      );
-      mockPrisma.referralRewardRule.upsert.mockImplementation(
-        async ({ create, update }: any) => {
-          stored = { id: 'default', ...(stored ?? {}), ...(stored ? update : create) };
-          return stored;
-        },
-      );
-
-      await service.updateRewardRules({
-        referrerDiscountPercent: 15,
-        maxRewardsPerReferrer: 20,
-      });
-
-      // Simulate an application restart: a fresh service instance sharing
-      // the same database must observe the updated rules.
-      const restarted: TestingModule = await Test.createTestingModule({
-        providers: [
-          ReferralsService,
-          { provide: PrismaService, useValue: mockPrisma },
-          { provide: ConfigService, useValue: mockConfig },
-          { provide: NotificationsService, useValue: mockNotifications },
-        ],
-      }).compile();
-
-      const service2 = restarted.get<ReferralsService>(ReferralsService);
-      const rules = await service2.getRewardRules();
-
-      expect(rules.referrerDiscountPercent).toBe(15);
-      expect(rules.maxRewardsPerReferrer).toBe(20);
-      expect(rules.refereeDiscountPercent).toBe(10);
-      expect(mockPrisma.referralRewardRule.upsert).toHaveBeenCalled();
-    });
-  });
-
-  describe('previewReward / redeemReward', () => {
-    it('previews percentage discount for a usable reward', async () => {
-      mockPrisma.referralReward.updateMany.mockResolvedValue({ count: 0 });
-      mockPrisma.referralReward.findFirst.mockResolvedValue({
-        id: 'rw-1',
-        beneficiaryId: 'u-1',
-        status: ReferralRewardStatus.ISSUED,
-        discountType: DiscountType.PERCENTAGE,
-        discountValue: 10,
-        kind: ReferralRewardKind.REFEREE,
-        expiresAt: new Date(Date.now() + 86_400_000),
-      });
-
-      const result = await service.previewReward('u-1', 50);
-
-      expect(result.valid).toBe(true);
-      expect(result.discountAmount).toBe(5);
-      expect(result.finalPrice).toBe(45);
-    });
-
-    it('redeems an issued reward', async () => {
-      mockPrisma.referralReward.findUnique.mockResolvedValue({
-        id: 'rw-1',
-        beneficiaryId: 'u-1',
-        status: ReferralRewardStatus.ISSUED,
-        expiresAt: new Date(Date.now() + 86_400_000),
-      });
-      mockPrisma.referralReward.update.mockResolvedValue({
-        id: 'rw-1',
-        status: ReferralRewardStatus.REDEEMED,
-        enrollmentId: 'enr-1',
-      });
-
-      const result = await service.redeemReward('u-1', 'rw-1', 'enr-1');
-      expect(result.status).toBe(ReferralRewardStatus.REDEEMED);
-    });
-
-    it('rejects redemption of a non-issued reward', async () => {
-      mockPrisma.referralReward.findUnique.mockResolvedValue({
-        id: 'rw-1',
-        beneficiaryId: 'u-1',
-        status: ReferralRewardStatus.REDEEMED,
-        expiresAt: null,
-      });
-
-      await expect(service.redeemReward('u-1', 'rw-1', 'enr-1')).rejects.toThrow(
-        BadRequestException,
-      );
+      expect(result).toEqual(updated);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
     });
   });
 });

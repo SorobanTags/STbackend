@@ -197,6 +197,33 @@ export class EnvironmentVariables {
   CDN_SIGNED_URL_TTL_SECONDS?: string;
 
   // ----------------------------------------------------------
+  // S3 object storage
+  // ----------------------------------------------------------
+  @IsOptional()
+  @IsString()
+  S3_REGION?: string;
+
+  @IsOptional()
+  @IsString()
+  S3_BUCKET?: string;
+
+  @IsOptional()
+  @IsString()
+  S3_ACCESS_KEY_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  S3_SECRET_ACCESS_KEY?: string;
+
+  @IsOptional()
+  @IsUrl({}, { message: 'S3_ENDPOINT must be a valid URL' })
+  S3_ENDPOINT?: string;
+
+  @IsOptional()
+  @IsUrl({}, { message: 'S3_PUBLIC_BASE_URL must be a valid URL' })
+  S3_PUBLIC_BASE_URL?: string;
+
+  // ----------------------------------------------------------
   // Email (Nodemailer)
   // ----------------------------------------------------------
   @IsDefined()
@@ -251,6 +278,17 @@ export class EnvironmentVariables {
   CACHE_TTL_SECONDS?: string;
 
   // ----------------------------------------------------------
+  // Meilisearch
+  // ----------------------------------------------------------
+  @IsOptional()
+  @IsUrl({}, { message: 'MEILISEARCH_HOST must be a valid URL' })
+  MEILISEARCH_HOST?: string;
+
+  @IsOptional()
+  @IsString()
+  MEILISEARCH_API_KEY?: string;
+
+  // ----------------------------------------------------------
   // Rate limiting
   // ----------------------------------------------------------
   @IsOptional()
@@ -303,240 +341,36 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   RATE_LIMIT_EXEMPT_IPS?: string;
-
-  // ----------------------------------------------------------
-  // Role-based throttling
-  // ----------------------------------------------------------
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'ROLE_THROTTLE_WINDOW_MS must be numeric' })
-  ROLE_THROTTLE_WINDOW_MS?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'ROLE_THROTTLE_ANON_LIMIT must be numeric' })
-  ROLE_THROTTLE_ANON_LIMIT?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'ROLE_THROTTLE_STUDENT_LIMIT must be numeric' })
-  ROLE_THROTTLE_STUDENT_LIMIT?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'ROLE_THROTTLE_INSTRUCTOR_LIMIT must be numeric' })
-  ROLE_THROTTLE_INSTRUCTOR_LIMIT?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'ROLE_THROTTLE_ADMIN_LIMIT must be numeric' })
-  ROLE_THROTTLE_ADMIN_LIMIT?: string;
-
-  // ----------------------------------------------------------
-  // Events / Backups / Misc
-  // ----------------------------------------------------------
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'EVENT_POLLING_INTERVAL_MS must be numeric' })
-  EVENT_POLLING_INTERVAL_MS?: string;
-
-  @IsOptional()
-  @IsString()
-  BACKUP_ENABLED?: string;
-
-  @IsOptional()
-  @IsString()
-  BACKUP_S3_BUCKET?: string;
-
-  @IsOptional()
-  @IsString()
-  BACKUP_S3_PREFIX?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'BACKUP_RETENTION_DAYS must be numeric' })
-  BACKUP_RETENTION_DAYS?: string;
-
-  @IsOptional()
-  @IsString()
-  AWS_REGION?: string;
-
-  @IsOptional()
-  @IsUrl({}, { message: 'CORS_ORIGIN must be a valid URL' })
-  CORS_ORIGIN?: string;
-
-  @IsOptional()
-  @IsString()
-  CERTIFICATE_PDF_DIR?: string;
-
-  @IsOptional()
-  @IsString()
-  PLATFORM_NAME?: string;
-
-  // ----------------------------------------------------------
-  // Meilisearch
-  // ----------------------------------------------------------
-  @IsOptional()
-  @IsUrl({}, { message: 'MEILISEARCH_HOST must be a valid URL' })
-  MEILISEARCH_HOST?: string;
-
-  @IsOptional()
-  @IsString()
-  MEILISEARCH_API_KEY?: string;
-
-  // ----------------------------------------------------------
-  // Fraud detection
-  // ----------------------------------------------------------
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'FRAUD_WINDOW_HOURS must be numeric' })
-  FRAUD_WINDOW_HOURS?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'FRAUD_MAX_ENROLLMENTS_PER_WINDOW must be numeric' })
-  FRAUD_MAX_ENROLLMENTS_PER_WINDOW?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'FRAUD_MAX_DAILY_ENROLLMENTS must be numeric' })
-  FRAUD_MAX_DAILY_ENROLLMENTS?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'FRAUD_MAX_ACTIVE_ENROLLMENTS must be numeric' })
-  FRAUD_MAX_ACTIVE_ENROLLMENTS?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'FRAUD_HIGH_AMOUNT_THRESHOLD_USDC must be numeric' })
-  FRAUD_HIGH_AMOUNT_THRESHOLD_USDC?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'FRAUD_HIGH_RISK_SCORE_THRESHOLD must be numeric' })
-  FRAUD_HIGH_RISK_SCORE_THRESHOLD?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'FRAUD_CRITICAL_SCORE_THRESHOLD must be numeric' })
-  FRAUD_CRITICAL_SCORE_THRESHOLD?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'REFERRAL_REFERRER_DISCOUNT_PERCENT must be numeric' })
-  REFERRAL_REFERRER_DISCOUNT_PERCENT?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'REFERRAL_REFEREE_DISCOUNT_PERCENT must be numeric' })
-  REFERRAL_REFEREE_DISCOUNT_PERCENT?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'REFERRAL_REWARD_EXPIRY_DAYS must be numeric' })
-  REFERRAL_REWARD_EXPIRY_DAYS?: string;
-
-  @IsOptional()
-  @Matches(/^\d+$/, { message: 'REFERRAL_MAX_REWARDS_PER_REFERRER must be numeric' })
-  REFERRAL_MAX_REWARDS_PER_REFERRER?: string;
-
-  // ----------------------------------------------------------
-  // SMS (Africa's Talking)
-  // ----------------------------------------------------------
-  @IsOptional()
-  @IsString()
-  AFRICASTALKING_USERNAME?: string;
-
-  @IsOptional()
-  @IsString()
-  AFRICASTALKING_API_KEY?: string;
-
-  @IsOptional()
-  @IsString()
-  AFRICASTALKING_SENDER_ID?: string;
-
-  // ----------------------------------------------------------
-  // Webhook signatures
-  // ----------------------------------------------------------
-  @IsDefined()
-  @IsString()
-  @MinLength(1)
-  WEBHOOK_SECRET: string;
-
-  @IsOptional()
-  @IsString()
-  WEBHOOK_SECRET_STRIPE?: string;
-
-  @IsOptional()
-  @IsString()
-  WEBHOOK_SECRET_AFRICASTALKING?: string;
-
-  @IsOptional()
-  @IsString()
-  WEBHOOK_SECRET_GITHUB?: string;
 }
 
-const DEFAULTS: Record<string, string> = {
-  NODE_ENV: NodeEnv.Development,
-  PORT: '3000',
-  API_PREFIX: 'api/v1',
-  LOG_LEVEL: LogLevel.Debug,
-  STELLAR_NETWORK: 'testnet',
-  STELLAR_RPC_URL: 'https://soroban-testnet.stellar.org',
-  STELLAR_HORIZON_URL: 'https://horizon-testnet.stellar.org',
-  SMTP_HOST: 'smtp.gmail.com',
-  SMTP_PORT: '587',
-  EMAIL_FROM: 'noreply@sorobanlard.com',
-  THROTTLE_TTL: '60',
-  THROTTLE_LIMIT: '100',
-  CAPTCHA_VERIFY_URL: 'https://www.google.com/recaptcha/api/siteverify',
-  CAPTCHA_TIMEOUT_MS: '5000',
-  CAPTCHA_MAX_FAILURES: '5',
-  CAPTCHA_BLOCK_DURATION_SECONDS: '900',
-  RATE_LIMIT_WINDOW_MS: '60000',
-  RATE_LIMIT_STANDARD_MAX: '100',
-  RATE_LIMIT_SENSITIVE_MAX: '10',
-  ROLE_THROTTLE_WINDOW_MS: '60000',
-  ROLE_THROTTLE_ANON_LIMIT: '20',
-  ROLE_THROTTLE_STUDENT_LIMIT: '60',
-  ROLE_THROTTLE_INSTRUCTOR_LIMIT: '120',
-  ROLE_THROTTLE_ADMIN_LIMIT: '300',
-  EVENT_POLLING_INTERVAL_MS: '5000',
-  BACKUP_ENABLED: 'false',
-  BACKUP_RETENTION_DAYS: '30',
-  AWS_REGION: 'us-east-1',
-  CORS_ORIGIN: 'http://localhost:3001',
-  CERTIFICATE_PDF_DIR: './uploads/certificates',
-  PLATFORM_NAME: 'SorobanLard',
-  FRAUD_WINDOW_HOURS: '1',
-  FRAUD_MAX_ENROLLMENTS_PER_WINDOW: '3',
-  FRAUD_MAX_DAILY_ENROLLMENTS: '10',
-  FRAUD_MAX_ACTIVE_ENROLLMENTS: '20',
-  FRAUD_HIGH_AMOUNT_THRESHOLD_USDC: '500',
-  FRAUD_HIGH_RISK_SCORE_THRESHOLD: '70',
-  FRAUD_CRITICAL_SCORE_THRESHOLD: '90',
-  REFERRAL_REFERRER_DISCOUNT_PERCENT: '10',
-  REFERRAL_REFEREE_DISCOUNT_PERCENT: '10',
-  REFERRAL_REWARD_EXPIRY_DAYS: '90',
-  REFERRAL_MAX_REWARDS_PER_REFERRER: '50',
-  AFRICASTALKING_USERNAME: 'sandbox',
-  AFRICASTALKING_SENDER_ID: 'SorobanLard',
-};
-
 /**
- * Validates the raw process.env against the schema, applies defaults for
- * optional variables, and throws a clear error listing every missing or
- * malformed required variable so boot fails fast instead of at runtime.
+ * Validates the process environment against {@link EnvironmentVariables}.
+ *
+ * Throws a single Error listing every problem so bootstrap fails fast with a
+ * complete picture instead of surfacing the first missing variable.
  */
-export function validateEnv(config: Record<string, string>): Record<string, string> {
-  const instance = plainToInstance(EnvironmentVariables, config);
+export function validateEnv(config: Record<string, unknown>): EnvironmentVariables {
+  const validated = plainToInstance(EnvironmentVariables, config, {
+    enableImplicitConversion: false,
+  });
 
-  const errors = validateSync(instance, {
+  const errors = validateSync(validated, {
     skipMissingProperties: false,
-    whitelist: true,
-    forbidNonWhitelisted: false,
+    whitelist: false,
   });
 
   if (errors.length > 0) {
-    const messages = errors.flatMap((error) => {
-      const constraints = error.constraints ? Object.values(error.constraints) : [];
-      return `  - ${error.property}: ${constraints.join('; ')}`;
-    });
-    throw new Error(
-      `[EnvValidation] Missing or invalid environment variables:\n${messages.join('\n')}`,
-    );
+    const messages = errors
+      .map((error) => {
+        const constraints = error.constraints
+          ? Object.values(error.constraints).join(', ')
+          : 'is invalid';
+        return `  - ${error.property}: ${constraints}`;
+      })
+      .join('\n');
+
+    throw new Error(`Environment validation failed:\n${messages}`);
   }
 
-  const merged: Record<string, string> = { ...DEFAULTS, ...config };
-  for (const key of Object.keys(instance)) {
-    const value = (instance as unknown as Record<string, string>)[key];
-    if (value !== undefined && value !== null) {
-      merged[key] = String(value);
-    }
-  }
-  return merged;
+  return validated;
 }

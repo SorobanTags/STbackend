@@ -57,6 +57,18 @@ export class BadgesService {
       throw new NotFoundException('Badge not found');
     }
 
+    if (
+      input.requirementType !== undefined &&
+      input.requirementType !== badge.requirementType
+    ) {
+      const earnedCount = await this.prisma.studentBadge.count({ where: { badgeId: id } });
+      if (earnedCount > 0) {
+        throw new BadRequestException(
+          'Cannot change requirementType of a badge that has already been earned by students',
+        );
+      }
+    }
+
     return this.prisma.badge.update({ where: { id }, data: input });
   }
 
@@ -81,13 +93,14 @@ export class BadgesService {
         select: { badgeId: true },
       });
       const earnedIds = new Set(earned.map(({ badgeId }) => badgeId));
+
+      // Load the metric for this event type exactly once, then evaluate all
+      // candidate badges against the cached value.
+      const metrics = await this.loadMetrics(transaction, studentId, event.type);
       const eligible: Badge[] = [];
 
       for (const badge of badges) {
-        if (
-          !earnedIds.has(badge.id) &&
-          (await this.verifyRequirement(transaction, studentId, badge))
-        ) {
+        if (!earnedIds.has(badge.id) && this.meetsRequirement(badge, metrics)) {
           eligible.push(badge);
         }
       }
@@ -125,12 +138,13 @@ export class BadgesService {
     return { studentId, badges };
   }
 
-  private async verifyRequirement(
+  /** Metrics cache shape — only the field relevant to the event type is populated. */
+  private async loadMetrics(
     transaction: Prisma.TransactionClient,
     studentId: string,
-    badge: Badge,
-  ): Promise<boolean> {
-    switch (badge.requirementType) {
+    type: BadgeRequirementType,
+  ): Promise<{ value: number }> {
+    switch (type) {
       case BadgeRequirementType.LESSONS_COMPLETED: {
         const enrollments = await transaction.enrollment.findMany({
           where: { studentId },
@@ -138,28 +152,33 @@ export class BadgesService {
             lessonProgress: { where: { completed: true }, select: { id: true } },
           },
         });
-        const completedLessons = enrollments.reduce(
+        const value = enrollments.reduce(
           (total, enrollment) => total + enrollment.lessonProgress.length,
           0,
         );
-        return completedLessons >= badge.requirementValue;
+        return { value };
       }
       case BadgeRequirementType.COURSES_COMPLETED: {
-        const completedCourses = await transaction.enrollment.count({
+        const value = await transaction.enrollment.count({
           where: {
             studentId,
             OR: [{ status: 'COMPLETED' }, { progressPercent: 100 }],
           },
         });
-        return completedCourses >= badge.requirementValue;
+        return { value };
       }
       case BadgeRequirementType.POINTS_EARNED: {
         const points = await transaction.userPoints.findUnique({
           where: { userId: studentId },
           select: { totalPoints: true },
         });
-        return (points?.totalPoints ?? 0) >= badge.requirementValue;
+        return { value: points?.totalPoints ?? 0 };
       }
     }
+  }
+
+  /** Pure predicate — no I/O. */
+  private meetsRequirement(badge: Badge, metrics: { value: number }): boolean {
+    return metrics.value >= badge.requirementValue;
   }
 }

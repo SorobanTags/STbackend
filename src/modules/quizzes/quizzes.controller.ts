@@ -42,10 +42,9 @@ export class QuizzesController {
   createQuestion(
     @Param('lessonId') lessonId: string,
     @Body() dto: CreateQuestionDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('role') userRole: string,
+    @CurrentUser() user: any,
   ) {
-    return this.quizzesService.createQuestion(lessonId, dto, userId, userRole);
+    return this.quizzesService.createQuestion(lessonId, dto, user);
   }
 
   @Get('questions/:id')
@@ -65,10 +64,9 @@ export class QuizzesController {
   updateQuestion(
     @Param('id') id: string,
     @Body() dto: UpdateQuestionDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('role') userRole: string,
+    @CurrentUser() user: any,
   ) {
-    return this.quizzesService.updateQuestion(id, dto, userId, userRole);
+    return this.quizzesService.updateQuestion(id, dto, user);
   }
 
   @Delete('questions/:id')
@@ -78,10 +76,9 @@ export class QuizzesController {
   @ApiOperation({ summary: 'Delete a quiz question by ID (instructor/admin)' })
   deleteQuestion(
     @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('role') userRole: string,
+    @CurrentUser() user: any,
   ) {
-    return this.quizzesService.deleteQuestion(id, userId, userRole);
+    return this.quizzesService.deleteQuestion(id, user);
   }
 
   @Patch('lessons/:lessonId/questions/reorder')
@@ -92,9 +89,8 @@ export class QuizzesController {
   reorderQuestions(
     @Param('lessonId') lessonId: string,
     @Body() dto: ReorderQuestionsDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('role') userRole: string,
+    @CurrentUser() user: any,
   ) {
-    return this.quizzesService.reorderQuestions(lessonId, dto, userId, userRole);
+    return this.quizzesService.reorderQuestions(lessonId, dto, user);
   }
 }

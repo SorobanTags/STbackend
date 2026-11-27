@@ -19,13 +19,15 @@ describe('AuthController Throttling (Integration)', () => {
   };
 
   beforeAll(async () => {
+    // Module-level limit is deliberately high: the 429 below must come from
+    // the @Throttle decorator on the handler, not from the module default.
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [
         ThrottlerModule.forRoot([
           {
             name: 'default',
             ttl: 60000,
-            limit: 10,
+            limit: 100,
           },
         ]),
       ],
@@ -42,6 +44,11 @@ describe('AuthController Throttling (Integration)', () => {
 
   afterAll(async () => {
     await app.close();
+  });
+
+  it('takes the /auth/nonce limit from the @Throttle decorator metadata', () => {
+    expect(Reflect.getMetadata('THROTTLER:LIMITdefault', AuthController.prototype.getNonce)).toBe(10);
+    expect(Reflect.getMetadata('THROTTLER:TTLdefault', AuthController.prototype.getNonce)).toBe(60000);
   });
 
   it('allows requests within limit on /auth/nonce and returns 429 when limit is exceeded', async () => {

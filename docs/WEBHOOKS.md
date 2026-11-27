@@ -27,8 +27,10 @@ selected from the first path segment after `/webhooks/`:
 | `POST /api/v1/webhooks` | Generic / default | `WEBHOOK_SECRET` | — |
 
 Provider-specific secrets are optional. When a provider secret is not set, the
-middleware falls back to `WEBHOOK_SECRET`. If neither is configured, the request
-is rejected with `403 Forbidden`.
+middleware falls back to `WEBHOOK_SECRET`. The default secret may be omitted if
+every provider has its own secret. If a request has no matching provider secret
+and no default is configured, it is rejected with `401 Unauthorized`; the
+response identifies the provider whose secret is missing.
 
 > **Current code status:** the signature middleware is installed globally for the
 > `webhooks` route prefix, while provider handlers can be added as controllers
@@ -254,8 +256,8 @@ executes first. Prefer Option A or B rather than relying on the guard alone.
 
 ## Operational checklist
 
-- Set `WEBHOOK_SECRET` in every environment; use provider-specific secrets when
-  rotating credentials independently.
+- Configure `WEBHOOK_SECRET` as a fallback, or set a provider-specific secret
+  for every webhook provider in use.
 - Store the exact raw body; never verify against a parsed/re-stringified object.
 - Make handlers idempotent using the provider event id/delivery id.
 - Return quickly (2xx) and move slow work to the queue.

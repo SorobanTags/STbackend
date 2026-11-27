@@ -21,11 +21,12 @@ import {
   ApiParam,
   ApiBody,
 } from '@nestjs/swagger';
-import { FraudDetectionService, ReviewFlagDto } from './fraud-detection.service';
+import { FraudDetectionService } from './fraud-detection.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { FraudQueueQueryDto } from './dto/fraud-queue-query.dto';
+import { ReviewFraudFlagDto } from './dto/review-fraud-flag.dto';
 import { UserRole, FraudFlagStatus, FraudRiskLevel } from '@prisma/client';
 
 @ApiTags('fraud-review')
@@ -105,27 +106,11 @@ export class FraudController {
       'CONFIRMED = fraud confirmed; downstream voids are handled separately.',
   })
   @ApiParam({ name: 'flagId', description: 'UUID of the EnrollmentFraudFlag record' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      required: ['decision'],
-      properties: {
-        decision: {
-          type: 'string',
-          enum: ['CLEARED', 'CONFIRMED'],
-          description: 'Admin resolution decision',
-        },
-        reviewNotes: {
-          type: 'string',
-          description: 'Optional free-text note recorded against the flag',
-        },
-      },
-    },
-  })
+  @ApiBody({ type: ReviewFraudFlagDto })
   reviewFlag(
     @Param('flagId')       flagId: string,
     @CurrentUser('id')     adminId: string,
-    @Body()                dto: ReviewFlagDto,
+    @Body()                dto: ReviewFraudFlagDto,
   ) {
     return this.fraudDetection.reviewFlag(flagId, adminId, dto);
   }

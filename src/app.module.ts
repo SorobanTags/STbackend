@@ -46,6 +46,7 @@ import { WishlistModule } from './modules/wishlist/wishlist.module';
 import { BadgesModule } from './modules/badges/badges.module';
 import { PrivacyModule } from './modules/privacy/privacy.module';
 import { QuestionsModule } from './modules/lessons/questions.module';
+import { KycModule } from './modules/kyc/kyc.module';
 
 @Module({
   imports: [
@@ -101,6 +102,7 @@ import { QuestionsModule } from './modules/lessons/questions.module';
     BadgesModule,
     PrivacyModule,
     QuestionsModule,
+    KycModule,
   ],
   providers: [
     // Issue #72 — role-based throttling runs before every route's own guards

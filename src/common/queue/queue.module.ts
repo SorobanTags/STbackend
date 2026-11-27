@@ -1,45 +1,83 @@
-import { Module } from '@nestjs/common';
+import { Module, OnApplicationShutdown } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
-import { QueueController } from './queue.controller';
-import { NOTIFICATION_EMAIL_QUEUE, CERTIFICATE_PDF_QUEUE } from './queue.constants';
+import Redis, { RedisOptions } from 'ioredis';
+import { NOTIFICATION_EMAIL_QUEUE } from './queue.constants';
 import { QueueService } from './queue.service';
+
+/**
+ * Builds the BullMQ connection configuration. When `REDIS_URL` is set the
+ * connection is expressed as a plain options object (host/port/credentials)
+ * so BullMQ owns the client; otherwise the same options shape is returned.
+ * Both branches return a consistent `RedisOptions` object.
+ */
+export function buildRedisConnectionOptions(
+  redisUrl?: string,
+): RedisOptions {
+  const base: RedisOptions = { maxRetriesPerRequest: null };
+
+  if (!redisUrl) {
+    return base;
+  }
+
+  const parsed = new URL(redisUrl);
+  const options: RedisOptions = {
+    ...base,
+    host: parsed.hostname,
+    port: parsed.port ? Number(parsed.port) : 6379,
+  };
+
+  if (parsed.username) {
+    options.username = decodeURIComponent(parsed.username);
+  }
+  if (parsed.password) {
+    options.password = decodeURIComponent(parsed.password);
+  }
+  if (parsed.protocol === 'rediss:') {
+    options.tls = {};
+  }
+  if (parsed.pathname && parsed.pathname !== '/') {
+    options.db = Number(parsed.pathname.slice(1));
+  }
+
+  return options;
+}
+
+/**
+ * Owns an optional ioredis client created from `REDIS_URL` and quits it on
+ * application shutdown so sockets are not leaked. When no client is created
+ * (BullMQ owns its own connection) `client` is `null`.
+ */
+export class RedisConnectionProvider implements OnApplicationShutdown {
+  readonly client: Redis | null;
+
+  constructor(redisUrl?: string) {
+    this.client = redisUrl
+      ? new Redis(buildRedisConnectionOptions(redisUrl))
+      : null;
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    if (this.client) {
+      await this.client.quit();
+    }
+  }
+}
 
 @Module({
   imports: [
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const redisUrl = config.get<string>('REDIS_URL');
-        const connection = redisUrl
-          ? new Redis(redisUrl, { maxRetriesPerRequest: null })
-          : {
-              host: config.get<string>('REDIS_HOST', 'localhost'),
-              port: config.get<number>('REDIS_PORT', 6379),
-              password: config.get<string>('REDIS_PASSWORD') || undefined,
-              maxRetriesPerRequest: null,
-            };
-
-        return {
-          connection,
-          defaultJobOptions: {
-            attempts: config.get<number>('QUEUE_JOB_ATTEMPTS', 5),
-            backoff: {
-              type: 'exponential',
-              delay: config.get<number>('QUEUE_RETRY_DELAY_MS', 5000),
-            },
-            removeOnComplete: { age: 7 * 24 * 60 * 60, count: 1000 },
-            removeOnFail: false,
-          },
-        };
-      },
+      useFactory: (config: ConfigService) => ({
+        connection: buildRedisConnectionOptions(
+          config.get<string>('REDIS_URL'),
+        ),
+      }),
     }),
-    BullModule.registerQueue({ name: NOTIFICATION_EMAIL_QUEUE }, { name: CERTIFICATE_PDF_QUEUE }),
+    BullModule.registerQueue({ name: NOTIFICATION_EMAIL_QUEUE }),
   ],
-  controllers: [QueueController],
   providers: [QueueService],
-  exports: [QueueService, BullModule],
+  exports: [QueueService],
 })
 export class QueueModule {}

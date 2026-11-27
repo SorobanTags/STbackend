@@ -4,7 +4,8 @@ import { SmsService } from './sms.service';
 import { SendSmsDto } from './dto/send-sms.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
-import { UserRole } from '@prisma/client';
+import { SmsCallbackSignatureGuard } from '../../common/guards/sms-callback-signature.guard';
+import { UserRole, SmsTemplateKey } from '@prisma/client';
 
 @ApiTags('sms')
 @Controller('notifications/sms')
@@ -38,8 +39,9 @@ export class SmsController {
   }
 
   @Post('callback')
+  @UseGuards(SmsCallbackSignatureGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Delivery status callback invoked by the SMS gateway' })
+  @ApiOperation({ summary: 'Delivery status callback invoked by the SMS gateway (signature-verified)' })
   handleCallback(@Body() payload: { id: string; status: string; phoneNumber?: string }) {
     return this.smsService.handleDeliveryCallback(payload);
   }

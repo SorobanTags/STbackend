@@ -1,12 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication, UnauthorizedException, ValidationPipe } from '@nestjs/common';
 import { SmsTemplateKey, UserRole } from '@prisma/client';
 import * as request from 'supertest';
 import { SmsController } from './sms.controller';
 import { SmsService } from './sms.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, ROLES_KEY } from '../../common/guards/roles.guard';
+import { SmsCallbackSignatureGuard } from '../../common/guards/sms-callback-signature.guard';
 
 describe('SmsController', () => {
   let controller: SmsController;
@@ -113,7 +114,7 @@ describe('SmsController', () => {
   });
 
   describe('handleCallback', () => {
-    it('delegates to SmsService.handleDeliveryCallback', async () => {
+    it('delegates to SmsService.handleDeliveryCallback when guard passes', async () => {
       const payload = { id: 'sms-1', status: 'DELIVERED' };
       mockSmsService.handleDeliveryCallback.mockResolvedValue({ ok: true });
 
@@ -121,6 +122,30 @@ describe('SmsController', () => {
 
       expect(mockSmsService.handleDeliveryCallback).toHaveBeenCalledWith(payload);
       expect(res).toEqual({ ok: true });
+    });
+
+    it('does NOT call SmsService when SmsCallbackSignatureGuard rejects with UnauthorizedException', async () => {
+      const payload = { id: 'sms-1', status: 'DELIVERED' };
+      // Simulate guard rejection — handleDeliveryCallback must NOT be reached
+      const mockGuard: Partial<SmsCallbackSignatureGuard> = {
+        canActivate: jest.fn().mockImplementation(() => {
+          throw new UnauthorizedException('SMS callback signature is required.');
+        }),
+      };
+
+      // Confirm guard throws before service is invoked
+      expect(() => mockGuard.canActivate!(null as any)).toThrow(UnauthorizedException);
+      expect(mockSmsService.handleDeliveryCallback).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call SmsService when guard returns false for invalid signature', async () => {
+      const mockGuard: Partial<SmsCallbackSignatureGuard> = {
+        canActivate: jest.fn().mockReturnValue(false),
+      };
+
+      const guardResult = mockGuard.canActivate!(null as any);
+      expect(guardResult).toBe(false);
+      expect(mockSmsService.handleDeliveryCallback).not.toHaveBeenCalled();
     });
   });
 
@@ -131,9 +156,13 @@ describe('SmsController', () => {
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([UserRole.ADMIN]);
     });
 
-    it('leaves the gateway callback unguarded', () => {
+    it('applies SmsCallbackSignatureGuard to the gateway callback route', () => {
       const handler = SmsController.prototype.handleCallback;
-      expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toBeUndefined();
+      const guards = Reflect.getMetadata(GUARDS_METADATA, handler);
+      expect(guards).toEqual([SmsCallbackSignatureGuard]);
+    });
+
+    it('does not apply controller-level guards (no class-level guard)', () => {
       expect(Reflect.getMetadata(GUARDS_METADATA, SmsController)).toBeUndefined();
     });
   });

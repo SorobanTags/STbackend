@@ -8,15 +8,25 @@ import { PrismaClient } from '@prisma/client';
  */
 export function configuredDatabaseUrl(raw = process.env.DATABASE_URL): string | undefined {
   if (!raw) return undefined;
-  const url = new URL(raw);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid DATABASE_URL: ${reason}`);
+  }
   if (!url.searchParams.has('connection_limit')) {
     const limit = Number(process.env.PRISMA_CONNECTION_LIMIT ?? '10');
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error('Invalid PRISMA_CONNECTION_LIMIT');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+      throw new Error('Invalid PRISMA_CONNECTION_LIMIT: must be an integer between 1 and 1000');
+    }
     url.searchParams.set('connection_limit', String(limit));
   }
   if (!url.searchParams.has('pool_timeout')) {
     const timeout = Number(process.env.PRISMA_POOL_TIMEOUT_SECONDS ?? '10');
-    if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 300) throw new Error('Invalid PRISMA_POOL_TIMEOUT_SECONDS');
+    if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 300) {
+      throw new Error('Invalid PRISMA_POOL_TIMEOUT_SECONDS: must be an integer between 1 and 300');
+    }
     url.searchParams.set('pool_timeout', String(timeout));
   }
   return url.toString();

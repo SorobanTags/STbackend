@@ -80,8 +80,51 @@ describe('AnalyticsService', () => {
         ],
       });
 
-      expect(result).toEqual({ ingested: 3, requested: 3 });
+      expect(result).toEqual({ ingested: 3, requested: 3, rejected: [] });
       expect(mockPrisma.analyticsEvent.createMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips invalid events and reports them with index and reason', async () => {
+      mockPrisma.analyticsEvent.createMany.mockResolvedValue({ count: 2 });
+
+      const result = await service.trackEventsBatch({
+        events: [
+          { eventType: 'click', path: '/a' },
+          { eventType: '   ' } as any,
+          { eventType: 'page_view', path: '/c' },
+        ],
+      });
+
+      expect(mockPrisma.analyticsEvent.createMany).toHaveBeenCalledTimes(1);
+      const call = mockPrisma.analyticsEvent.createMany.mock.calls[0][0];
+      expect(call.data).toHaveLength(2);
+      expect(call.data).toEqual([
+        expect.objectContaining({ eventType: 'click', path: '/a' }),
+        expect.objectContaining({ eventType: 'page_view', path: '/c' }),
+      ]);
+
+      expect(result.ingested).toBe(2);
+      expect(result.requested).toBe(3);
+      expect(result.rejected).toHaveLength(1);
+      expect(result.rejected[0]).toEqual({
+        index: 1,
+        reason: expect.any(String),
+      });
+    });
+
+    it('surfaces a createMany count lower than the number of valid events', async () => {
+      mockPrisma.analyticsEvent.createMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.trackEventsBatch({
+        events: [
+          { eventType: 'click', path: '/a' },
+          { eventType: 'click', path: '/b' },
+        ],
+      });
+
+      expect(result.ingested).toBe(1);
+      expect(result.requested).toBe(2);
+      expect(result.rejected).toEqual([]);
     });
 
     it('rejects empty batches', async () => {

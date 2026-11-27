@@ -1,5 +1,9 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  ANALYTICS_EVENT_TYPES,
+  TrackAnalyticsEventDto,
+} from './dto/track-analytics-event.dto';
 
 const MAX_RANGE_DAYS = 90;
 const MAX_BATCH_SIZE = 100;
@@ -39,20 +43,38 @@ export interface QueryRawEventsInput {
   limit?: number;
 }
 
+const MAX_PROPERTIES_BYTES = 16_384;
+
+export interface TrackEventContext {
+  userId?: string;
+  ipAddress?: string;
+}
+
+export interface RejectedEvent {
+  index: number;
+  reason: string;
+}
+
+export interface TrackEventsBatchResult {
+  ingested: number;
+  requested: number;
+  rejected: RejectedEvent[];
+}
+
 @Injectable()
 export class AnalyticsService {
   private readonly logger = new Logger(AnalyticsService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async trackEvent(input: TrackEventInput, context: TrackEventContext = {}) {
-    this.validateEventPayload(input);
+  async trackEvent(dto: TrackAnalyticsEventDto, context: TrackEventContext = {}) {
+    this.validateEventPayload(dto);
 
     return this.prisma.analyticsEvent.create({
       data: {
-        eventType: input.eventType.trim(),
-        path: input.path ?? null,
-        properties: (input.properties ?? {}) as any,
+        eventType: dto.eventType.trim(),
+        path: dto.path ?? null,
+        properties: (dto.properties ?? {}) as any,
         userId: context.userId ?? null,
         ipAddress: context.ipAddress ?? null,
         userAgent: context.userAgent ?? null,
@@ -60,43 +82,119 @@ export class AnalyticsService {
     });
   }
 
-  async trackEventsBatch(input: TrackEventsBatchInput) {
-    if (!input || !Array.isArray(input.events) || input.events.length === 0) {
-      throw new BadRequestException('events must be a non-empty array');
+  /**
+   * Batch-ingests analytics events.
+   *
+   * Invalid events are skipped rather than rejecting the whole batch. The
+   * returned object reports `ingested` (rows actually written), `requested`
+   * (events submitted) and `rejected` (index + reason for each skipped event).
+   * A `createMany` count lower than the number of valid events is surfaced via
+   * `ingested` so callers can detect partial writes.
+   */
+  async trackEventsBatch(dto: {
+    events: TrackAnalyticsEventDto[];
+  }): Promise<TrackEventsBatchResult> {
+    if (!dto.events || dto.events.length === 0) {
+      throw new BadRequestException('events array must not be empty');
     }
-    if (input.events.length > MAX_BATCH_SIZE) {
+
+    if (dto.events.length > MAX_BATCH_SIZE) {
       throw new BadRequestException(
         `Batch size exceeds maximum of ${MAX_BATCH_SIZE}`,
       );
     }
 
-    for (const event of input.events) {
-      this.validateEventPayload(event);
-    }
+    const valid: TrackAnalyticsEventDto[] = [];
+    const rejected: RejectedEvent[] = [];
 
-    const result = await this.prisma.analyticsEvent.createMany({
-      data: input.events.map((event) => ({
-        eventType: event.eventType.trim(),
-        path: event.path ?? null,
-        properties: (event.properties ?? {}) as any,
-      })),
+    dto.events.forEach((event, index) => {
+      try {
+        this.validateEventPayload(event);
+        valid.push(event);
+      } catch (error) {
+        rejected.push({
+          index,
+          reason:
+            error instanceof BadRequestException
+              ? error.message
+              : 'invalid event payload',
+        });
+      }
     });
 
-    return { ingested: result.count, requested: input.events.length };
+    let ingested = 0;
+    if (valid.length > 0) {
+      const result = await this.prisma.analyticsEvent.createMany({
+        data: valid.map((event) => ({
+          eventType: event.eventType.trim(),
+          path: event.path ?? null,
+          properties: (event.properties ?? {}) as any,
+        })),
+      });
+      ingested = result.count;
+
+      if (ingested < valid.length) {
+        this.logger.warn(
+          `Analytics batch partial write: ingested ${ingested} of ${valid.length} valid events`,
+        );
+      }
+    }
+
+    return {
+      ingested,
+      requested: dto.events.length,
+      rejected,
+    };
   }
 
-  async getVolumeByEventType(from?: string, to?: string) {
+  validateEventPayload(dto: TrackAnalyticsEventDto): void {
+    if (!dto || typeof dto !== 'object') {
+      throw new BadRequestException('event payload must be an object');
+    }
+
+    if (!dto.eventType || typeof dto.eventType !== 'string' || !dto.eventType.trim()) {
+      throw new BadRequestException('eventType is required');
+    }
+
+    const isKnown = ANALYTICS_EVENT_TYPES.includes(dto.eventType);
+    const isCustom = /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(dto.eventType);
+    if (!isKnown && !isCustom) {
+      throw new BadRequestException(`unknown eventType: ${dto.eventType}`);
+    }
+
+    if (dto.properties !== undefined) {
+      if (
+        dto.properties === null ||
+        typeof dto.properties !== 'object' ||
+        Array.isArray(dto.properties)
+      ) {
+        throw new BadRequestException('properties must be a plain object');
+      }
+
+      const size = Buffer.byteLength(JSON.stringify(dto.properties), 'utf8');
+      if (size > MAX_PROPERTIES_BYTES) {
+        throw new BadRequestException('properties payload too large');
+      }
+    }
+  }
+
+  async getVolumeByEventType(from: string, to: string) {
     const where: any = {
       occurredAt: this.boundedRange(from, to),
     };
 
     const grouped = await this.prisma.analyticsEvent.groupBy({
       by: ['eventType'],
-      where,
+      where: {
+        createdAt: {
+          gte: new Date(from),
+          lte: new Date(to),
+        },
+      },
       _count: { _all: true },
     });
 
-    const byEventType = grouped.map((row: any) => ({
+    const byEventType = rows.map((row: any) => ({
       eventType: row.eventType,
       count: row._count?._all ?? 0,
     }));
@@ -115,13 +213,14 @@ export class AnalyticsService {
     if (input.eventType) {
       where.eventType = input.eventType;
     }
+    }
 
     const [data, total] = await Promise.all([
       this.prisma.analyticsEvent.findMany({
         where,
-        orderBy: { occurredAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
+        orderBy: { createdAt: 'desc' },
       }),
       this.prisma.analyticsEvent.count({ where }),
     ]);
@@ -136,55 +235,7 @@ export class AnalyticsService {
       },
     };
   }
-
-  validateEventPayload(input: TrackEventInput) {
-    if (!input || typeof input.eventType !== 'string' || !input.eventType.trim()) {
-      throw new BadRequestException('eventType is required');
-    }
-
-    const eventType = input.eventType.trim();
-    if (!KNOWN_EVENT_TYPES.has(eventType) && !eventType.startsWith('custom.')) {
-      this.logger.debug(`Unknown event type: ${eventType}`);
-    }
-
-    if (input.properties !== undefined) {
-      if (
-        input.properties === null ||
-        typeof input.properties !== 'object' ||
-        Array.isArray(input.properties)
-      ) {
-        throw new BadRequestException('properties must be an object');
-      }
-
-      const size = Buffer.byteLength(JSON.stringify(input.properties), 'utf8');
-      if (size > MAX_PROPERTIES_BYTES) {
-        throw new BadRequestException('properties payload too large');
-      }
-    }
-  }
-
-  private boundedRange(from?: string, to?: string): { gte: Date; lte: Date } {
-    if (!from || !to) {
-      throw new BadRequestException('from and to are required');
-    }
-
-    const gte = new Date(from);
-    const lte = new Date(to);
-
-    if (Number.isNaN(gte.getTime()) || Number.isNaN(lte.getTime())) {
-      throw new BadRequestException('from and to must be valid dates');
-    }
-    if (gte > lte) {
-      throw new BadRequestException('from must be before to');
-    }
-
-    const spanDays = (lte.getTime() - gte.getTime()) / (1000 * 60 * 60 * 24);
-    if (spanDays > MAX_RANGE_DAYS) {
-      throw new BadRequestException(
-        `Date range exceeds maximum of ${MAX_RANGE_DAYS} days`,
-      );
-    }
-
-    return { gte, lte };
-  }
+        orderBy: { occurredAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
 }

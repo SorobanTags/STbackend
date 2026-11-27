@@ -55,6 +55,8 @@ describe('HttpExceptionFilter', () => {
     });
     expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
       path: '/api/v1/users',
+      statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+      message: 'Internal server error',
     }));
   });
 
@@ -62,6 +64,45 @@ describe('HttpExceptionFilter', () => {
     filter.catch(new HttpException('Not found', HttpStatus.NOT_FOUND), host);
 
     expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('preserves array messages and standard error fields from HttpException bodies', () => {
+    filter.catch(
+      new HttpException(
+        { message: ['a', 'b'], error: 'Bad Request' },
+        HttpStatus.BAD_REQUEST,
+      ),
+      host,
+    );
+
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+      message: ['a', 'b'],
+      error: 'Bad Request',
+    }));
+  });
+
+  it('preserves application-specific fields from HttpException bodies', () => {
+    filter.catch(
+      new HttpException(
+        { message: 'Invalid input', code: 'INVALID_INPUT' },
+        HttpStatus.BAD_REQUEST,
+      ),
+      host,
+    );
+
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Invalid input',
+      code: 'INVALID_INPUT',
+    }));
+  });
+
+  it('wraps a plain string HttpException response as a message', () => {
+    filter.catch(new HttpException('Bad request', HttpStatus.BAD_REQUEST), host);
+
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Bad request',
+      statusCode: HttpStatus.BAD_REQUEST,
+    }));
   });
 
   it('maps Prisma P2002 unique violations to 409 Conflict', () => {
@@ -92,6 +133,32 @@ describe('HttpExceptionFilter', () => {
       statusCode: HttpStatus.BAD_REQUEST,
     }));
     expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('returns the documented message string for each mapped Prisma code', () => {
+    const cases: [string, string][] = [
+      ['P2002', 'A record with this value already exists'],
+      ['P2025', 'The requested record was not found'],
+      ['P2003', 'The request references a related record that does not exist'],
+    ];
+    for (const [code, expectedMessage] of cases) {
+      jest.clearAllMocks();
+      filter.catch(prismaError(code), host);
+      expect(response.json).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expectedMessage }),
+      );
+    }
+  });
+
+  it('maps an unmapped Prisma code (P2000) to 500 and reports to Sentry', () => {
+    const err = prismaError('P2000');
+    filter.catch(err, host);
+
+    expect(response.status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: HttpStatus.INTERNAL_SERVER_ERROR, message: 'Internal server error' }),
+    );
+    expect(Sentry.captureException).toHaveBeenCalledWith(err, expect.any(Object));
   });
 
   it('does not leak Prisma stack traces in mapped responses', () => {

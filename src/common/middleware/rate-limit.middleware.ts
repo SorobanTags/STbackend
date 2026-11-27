@@ -26,6 +26,8 @@ export class RateLimitMiddleware implements NestMiddleware {
   private readonly standardMax: number;
   private readonly sensitiveMax: number;
   private readonly exemptIps: Set<string>;
+  private readonly maxBuckets: number;
+  private lastPruneAt = 0;
 
   constructor(private readonly config: ConfigService) {
     this.windowMs = this.config.get<number>('RATE_LIMIT_WINDOW_MS', 60000);
@@ -37,6 +39,7 @@ export class RateLimitMiddleware implements NestMiddleware {
     this.exemptIps = new Set(
       exemptList.split(',').map((ip) => ip.trim()).filter(Boolean),
     );
+    this.maxBuckets = this.config.get<number>('RATE_LIMIT_MAX_BUCKETS', 10_000);
     if (this.exemptIps.size > 0) {
       this.logger.log(`Rate-limit exemption list loaded (${this.exemptIps.size} IPs)`);
     }
@@ -58,11 +61,12 @@ export class RateLimitMiddleware implements NestMiddleware {
     const key = `${req.ip}:${sensitive ? 'sensitive' : 'standard'}`;
     const now = Date.now();
 
+    this.pruneExpired(now);
+
     let bucket = this.buckets.get(key);
     if (!bucket || now >= bucket.resetAt) {
       bucket = { count: 0, resetAt: now + this.windowMs };
       this.buckets.set(key, bucket);
-      this.pruneExpired(now);
     }
     bucket.count += 1;
 
@@ -91,14 +95,16 @@ export class RateLimitMiddleware implements NestMiddleware {
     next();
   }
 
-  /**
-   * Lazy eviction pass so idle buckets do not grow unbounded. Only runs
-   * occasionally, amortising cleanup across requests.
-   */
   private pruneExpired(now: number) {
-    if (this.buckets.size < 5_000) return;
+    if (now - this.lastPruneAt < this.windowMs && this.buckets.size < this.maxBuckets) return;
+    this.lastPruneAt = now;
     for (const [key, bucket] of this.buckets) {
       if (now >= bucket.resetAt) this.buckets.delete(key);
+    }
+    if (this.buckets.size > this.maxBuckets) {
+      const sorted = [...this.buckets.entries()].sort((a, b) => a[1].resetAt - b[1].resetAt);
+      const toEvict = sorted.slice(0, this.buckets.size - this.maxBuckets);
+      for (const [key] of toEvict) this.buckets.delete(key);
     }
   }
 }

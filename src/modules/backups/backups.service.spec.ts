@@ -16,7 +16,15 @@ import { BackupsService } from "./backups.service";
 describe("BackupsService", () => {
   let service: BackupsService;
 
+  const mockTx = {
+    courseBackup: {
+      create: jest.fn(),
+      findFirst: jest.fn(),
+    },
+  };
+
   const mockPrisma = {
+    $transaction: jest.fn((fn: (tx: typeof mockTx) => Promise<any>) => fn(mockTx)),
     course: {
       findUnique: jest.fn(),
       findMany: jest.fn(),
@@ -80,6 +88,11 @@ describe("BackupsService", () => {
   };
 
   beforeEach(async () => {
+    jest.clearAllMocks();
+    // Restore default $transaction implementation after any test-local overrides
+    mockPrisma.$transaction.mockImplementation(
+      (fn: (tx: typeof mockTx) => Promise<any>) => fn(mockTx),
+    );
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BackupsService,
@@ -88,14 +101,13 @@ describe("BackupsService", () => {
     }).compile();
 
     service = module.get<BackupsService>(BackupsService);
-    jest.clearAllMocks();
   });
 
   describe("exportCourseBackup", () => {
     it("should export full course structure and create version 1 when no previous backup exists", async () => {
       mockPrisma.course.findUnique.mockResolvedValue(sampleCourse);
-      mockPrisma.courseBackup.findFirst.mockResolvedValue(null);
-      mockPrisma.courseBackup.create.mockImplementation(({ data }) =>
+      mockTx.courseBackup.findFirst.mockResolvedValue(null);
+      mockTx.courseBackup.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: "backup-1", ...data }),
       );
 
@@ -121,13 +133,13 @@ describe("BackupsService", () => {
         },
       });
 
-      expect(mockPrisma.courseBackup.findFirst).toHaveBeenCalledWith({
+      expect(mockTx.courseBackup.findFirst).toHaveBeenCalledWith({
         where: { courseId: "course-123" },
         orderBy: { version: "desc" },
         select: { version: true },
       });
 
-      expect(mockPrisma.courseBackup.create).toHaveBeenCalledWith({
+      expect(mockTx.courseBackup.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           courseId: "course-123",
           version: 1,
@@ -144,8 +156,8 @@ describe("BackupsService", () => {
 
     it("should increment version when a previous backup exists for the course", async () => {
       mockPrisma.course.findUnique.mockResolvedValue(sampleCourse);
-      mockPrisma.courseBackup.findFirst.mockResolvedValue({ version: 3 });
-      mockPrisma.courseBackup.create.mockImplementation(({ data }) =>
+      mockTx.courseBackup.findFirst.mockResolvedValue({ version: 3 });
+      mockTx.courseBackup.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: "backup-4", ...data }),
       );
 
@@ -153,12 +165,73 @@ describe("BackupsService", () => {
       const result = await service.exportCourseBackup("course-123", adminUser);
 
       expect(result.version).toBe(4);
-      expect(mockPrisma.courseBackup.create).toHaveBeenCalledWith({
+      expect(mockTx.courseBackup.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           version: 4,
           requestedBy: "admin-1",
         }),
       });
+    });
+
+    it("should retry on P2002 and succeed with incremented version on second attempt", async () => {
+      mockPrisma.course.findUnique.mockResolvedValue(sampleCourse);
+
+      const p2002 = Object.assign(new Error("Unique constraint failed"), {
+        code: "P2002",
+        name: "PrismaClientKnownRequestError",
+      });
+
+      // First transaction attempt throws P2002; second succeeds
+      let callCount = 0;
+      mockPrisma.$transaction.mockImplementation(
+        async (fn: (tx: typeof mockTx) => Promise<any>) => {
+          callCount += 1;
+          const tx = {
+            courseBackup: {
+              findFirst: jest.fn().mockResolvedValue({ version: callCount }),
+              create: jest.fn().mockImplementation(({ data }) => {
+                if (callCount === 1) throw p2002;
+                return Promise.resolve({ id: `backup-${data.version}`, ...data });
+              }),
+            },
+          };
+          return fn(tx);
+        },
+      );
+
+      const result = await service.exportCourseBackup("course-123", {
+        id: "u-1",
+        role: UserRole.ADMIN,
+      });
+
+      expect(callCount).toBe(2);
+      expect(result.version).toBe(2);
+    });
+
+    it("should give up and throw BadRequestException after max retry attempts", async () => {
+      const { BadRequestException } = await import("@nestjs/common");
+      mockPrisma.course.findUnique.mockResolvedValue(sampleCourse);
+
+      const p2002 = Object.assign(new Error("Unique constraint failed"), {
+        code: "P2002",
+        name: "PrismaClientKnownRequestError",
+      });
+
+      mockPrisma.$transaction.mockImplementation(
+        async (fn: (tx: typeof mockTx) => Promise<any>) => {
+          const tx = {
+            courseBackup: {
+              findFirst: jest.fn().mockResolvedValue({ version: 1 }),
+              create: jest.fn().mockRejectedValue(p2002),
+            },
+          };
+          return fn(tx);
+        },
+      );
+
+      await expect(
+        service.exportCourseBackup("course-123", { id: "u-1", role: UserRole.ADMIN }),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it("should throw NotFoundException if course does not exist", async () => {
@@ -184,6 +257,30 @@ describe("BackupsService", () => {
       await expect(
         service.exportCourseBackup("course-123", unauthorizedInstructor),
       ).rejects.toThrow(ForbiddenException);
+
+      expect(mockPrisma.courseBackup.create).not.toHaveBeenCalled();
+    });
+
+    it("should NOT call courseBackup.create when course is not found", async () => {
+      mockPrisma.course.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.exportCourseBackup("non-existent"),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(mockPrisma.courseBackup.create).not.toHaveBeenCalled();
+    });
+
+    it("should proceed without access check when no user is provided (automatic path)", async () => {
+      mockPrisma.course.findUnique.mockResolvedValue(sampleCourse);
+      mockPrisma.courseBackup.findFirst.mockResolvedValue(null);
+      mockPrisma.courseBackup.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: "backup-auto", ...data }),
+      );
+
+      const result = await service.exportCourseBackup("course-123");
+      expect(result).toBeDefined();
+      expect(mockPrisma.courseBackup.create).toHaveBeenCalled();
     });
   });
 

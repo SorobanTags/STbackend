@@ -103,12 +103,61 @@ describe('SmsService', () => {
       expect(service.validatePhoneNumber('08012345678', 'ng')).toBe('+2348012345678');
     });
 
+    it('strips spaces from an international number', () => {
+      expect(service.validatePhoneNumber('+234 801 234 5678', 'NG')).toBe('+2348012345678');
+    });
+
+    it('strips dashes from a local number', () => {
+      expect(service.validatePhoneNumber('0801-234-5678', 'NG')).toBe('+2348012345678');
+    });
+
+    it('strips parentheses from a number', () => {
+      expect(service.validatePhoneNumber('(0801) 234 5678', 'NG')).toBe('+2348012345678');
+    });
+
     it('supports the other supported countries', () => {
       expect(service.validatePhoneNumber('0712345678', 'KE')).toBe('+254712345678');
       expect(service.validatePhoneNumber('0772345678', 'UG')).toBe('+256772345678');
       expect(service.validatePhoneNumber('0241234567', 'GH')).toBe('+233241234567');
       expect(service.validatePhoneNumber('0821234567', 'ZA')).toBe('+27821234567');
       expect(service.validatePhoneNumber('0754123456', 'TZ')).toBe('+255754123456');
+    });
+
+    describe('per-country accepted/rejected matrix', () => {
+      const cases: Array<{
+        country: string;
+        input: string;
+        expected: string | null;
+      }> = [
+        { country: 'NG', input: '+234 801 234 5678', expected: '+2348012345678' },
+        { country: 'NG', input: '0801-234-5678', expected: '+2348012345678' },
+        { country: 'NG', input: '12345', expected: null },
+        { country: 'KE', input: '+254 712 345 678', expected: '+254712345678' },
+        { country: 'KE', input: '0712-345-678', expected: '+254712345678' },
+        { country: 'KE', input: '0000000000', expected: null },
+        { country: 'UG', input: '+256 772 345 678', expected: '+256772345678' },
+        { country: 'UG', input: '0772-345-678', expected: '+256772345678' },
+        { country: 'UG', input: '12345', expected: null },
+        { country: 'GH', input: '+233 24 123 4567', expected: '+233241234567' },
+        { country: 'GH', input: '024-123-4567', expected: '+233241234567' },
+        { country: 'GH', input: '9999999999', expected: null },
+        { country: 'ZA', input: '+27 82 123 4567', expected: '+27821234567' },
+        { country: 'ZA', input: '082-123-4567', expected: '+27821234567' },
+        { country: 'ZA', input: '12345', expected: null },
+        { country: 'TZ', input: '+255 754 123 456', expected: '+255754123456' },
+        { country: 'TZ', input: '0754-123-456', expected: '+255754123456' },
+        { country: 'TZ', input: '0000000000', expected: null },
+      ];
+
+      it.each(cases)('$country $input -> $expected', ({ country, input, expected }) => {
+        if (expected === null) {
+          expect(() => service.validatePhoneNumber(input, country)).toThrow(
+            BadRequestException,
+          );
+        } else {
+          expect(service.validatePhoneNumber(input, country)).toBe(expected);
+        }
+      });
     });
   });
 
@@ -229,6 +278,24 @@ describe('SmsService', () => {
         data: expect.objectContaining({
           status: SmsStatus.FAILED,
           failureReason: expect.stringContaining('Rejected'),
+        }),
+      });
+    });
+
+    it('marks the message failed when the gateway throws', async () => {
+      mockGatewaySend.mockRejectedValueOnce(new Error('network down'));
+
+      await service.sendSms({
+        phoneNumber: '08012345678',
+        countryCode: 'NG',
+        message: 'Your enrollment is confirmed',
+      });
+
+      expect(mockPrisma.smsMessage.update).toHaveBeenCalledWith({
+        where: { id: 'sms-1' },
+        data: expect.objectContaining({
+          status: SmsStatus.FAILED,
+          failureReason: 'network down',
         }),
       });
     });

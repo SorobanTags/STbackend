@@ -1,93 +1,64 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
-import { CourseStatus } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CreateWishlistItemDto } from './dto/create-wishlist-item.dto';
+import { UpdateWishlistItemDto } from './dto/update-wishlist-item.dto';
 
 @Injectable()
 export class WishlistService {
-  private readonly logger = new Logger(WishlistService.name);
-
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Add a course to a student's wishlist.
-   * Validates that the course exists and is ACTIVE, and prevents
-   * duplicate entries (enforced here and by the DB unique constraint).
-   * Idempotent — adding an already-saved course returns the existing item.
-   */
-  async add(studentId: string, courseId: string) {
-    if (!courseId) throw new BadRequestException('courseId is required');
-
-    const course = await this.prisma.course.findFirst({
-      where: { id: courseId, status: CourseStatus.ACTIVE },
-      select: { id: true, title: true },
-    });
-    if (!course) {
-      throw new NotFoundException(`Course ${courseId} not found or not active`);
-    }
-
-    const existing = await this.prisma.wishlistItem.findUnique({
-      where: { studentId_courseId: { studentId, courseId } },
-    });
-    if (existing) {
-      return {
-        item: existing,
-        alreadySaved: true,
-        message: 'Course already in wishlist',
-      };
-    }
-
-    const item = await this.prisma.wishlistItem.create({
-      data: { studentId, courseId },
-      include: { course: true },
-    });
-
-    this.logger.log(`Wishlist item added: ${studentId} → ${courseId}`);
-    return { item, alreadySaved: false, message: 'Course added to wishlist' };
-  }
-
-  /**
-   * Remove a course from a student's wishlist.
-   */
-  async remove(studentId: string, courseId: string) {
-    if (!courseId) throw new BadRequestException('courseId is required');
-
-    const existing = await this.prisma.wishlistItem.findUnique({
-      where: { studentId_courseId: { studentId, courseId } },
-    });
-    if (!existing) {
-      throw new NotFoundException('Course not found in wishlist');
-    }
-
-    await this.prisma.wishlistItem.delete({ where: { id: existing.id } });
-
-    this.logger.log(`Wishlist item removed: ${studentId} → ${courseId}`);
-    return { message: 'Course removed from wishlist' };
-  }
-
-  /**
-   * List the student's wishlist with course details, newest first.
-   */
   async findAll(studentId: string, page = 1, limit = 20) {
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Math.floor(limit) || 20));
+
+    const where = { studentId };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.wishlistItem.findMany({
-        where: { studentId },
-        include: {
-          course: {
-            include: { instructor: { select: { name: true, avatarUrl: true } } },
-          },
-        },
+        where,
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
         orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
       }),
-      this.prisma.wishlistItem.count({ where: { studentId } }),
+      this.prisma.wishlistItem.count({ where }),
     ]);
 
-    return { data: items, meta: { total, page, limit } };
+    return {
+      data: items,
+      meta: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages: Math.ceil(total / safeLimit),
+      },
+    };
+  }
+
+  async findOne(studentId: string, id: string) {
+    const item = await this.prisma.wishlistItem.findFirst({
+      where: { id, studentId },
+    });
+    if (!item) {
+      throw new NotFoundException('Wishlist item not found');
+    }
+    return item;
+  }
+
+  async create(studentId: string, dto: CreateWishlistItemDto) {
+    return this.prisma.wishlistItem.create({
+      data: { ...dto, studentId },
+    });
+  }
+
+  async update(studentId: string, id: string, dto: UpdateWishlistItemDto) {
+    await this.findOne(studentId, id);
+    return this.prisma.wishlistItem.update({
+      where: { id },
+      data: dto,
+    });
+  }
+
+  async remove(studentId: string, id: string) {
+    await this.findOne(studentId, id);
+    return this.prisma.wishlistItem.delete({ where: { id } });
   }
 }

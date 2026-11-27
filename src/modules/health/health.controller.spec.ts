@@ -3,7 +3,7 @@ import { ServiceUnavailableException } from '@nestjs/common';
 import { TerminusModule } from '@nestjs/terminus';
 import { HealthController } from './health.controller';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { EventsService } from '../events/events.service';
+import { PollerHealthIndicator } from '../events/poller-health.indicator';
 import { CacheService } from '../../common/cache/cache.service';
 import { SearchService } from '../search/search.service';
 import type { CheckpointStatus } from '../events/events.service';
@@ -14,9 +14,8 @@ import type { CheckpointStatus } from '../events/events.service';
  * actual HealthCheckService aggregation and `checkpoint()` runs the real
  * handler that GET /health/checkpoint is bound to.
  *
- * Issue #170 — the aggregate check must cover every critical dependency:
- * Postgres (via Prisma), Redis (via CacheService ping) and Meilisearch
- * (via SearchService ping), plus the informational event-poller checkpoint.
+ * Issue #6 — HealthModule must not import EventsModule (heavy dependency);
+ * the controller now uses the narrow PollerHealthIndicator instead.
  */
 describe('HealthController (Issue #80 — checkpoint via health endpoint)', () => {
   let controller: HealthController;
@@ -32,7 +31,7 @@ describe('HealthController (Issue #80 — checkpoint via health endpoint)', () =
     healthy: true,
   };
 
-  const mockEvents = { getCheckpointStatus: jest.fn() };
+  const mockPollerHealth = { getCheckpointStatus: jest.fn() };
   const mockCache = { ping: jest.fn() };
   const mockSearch = { ping: jest.fn() };
   // PrismaHealthIndicator.pingDb tries $runCommandRaw first, then falls back to
@@ -50,7 +49,7 @@ describe('HealthController (Issue #80 — checkpoint via health endpoint)', () =
       controllers: [HealthController],
       providers: [
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: EventsService, useValue: mockEvents },
+        { provide: PollerHealthIndicator, useValue: mockPollerHealth },
         { provide: CacheService, useValue: mockCache },
         { provide: SearchService, useValue: mockSearch },
       ],
@@ -62,14 +61,14 @@ describe('HealthController (Issue #80 — checkpoint via health endpoint)', () =
     mockPrisma.$queryRawUnsafe.mockResolvedValue([{ result: 1 }]);
     mockCache.ping.mockResolvedValue(3);
     mockSearch.ping.mockResolvedValue(7);
-    mockEvents.getCheckpointStatus.mockResolvedValue(healthyStatus);
+    mockPollerHealth.getCheckpointStatus.mockResolvedValue(healthyStatus);
   });
 
   it('GET /health/checkpoint returns the current ledger checkpoint payload', async () => {
     const result = await controller.checkpoint();
 
     expect(result).toEqual(healthyStatus);
-    expect(mockEvents.getCheckpointStatus).toHaveBeenCalledTimes(1);
+    expect(mockPollerHealth.getCheckpointStatus).toHaveBeenCalledTimes(1);
   });
 
   it('GET /health includes database, redis, meilisearch and event poller indicators', async () => {
@@ -90,7 +89,7 @@ describe('HealthController (Issue #80 — checkpoint via health endpoint)', () =
   });
 
   it('GET /health surfaces a degraded checkpoint without failing the overall check', async () => {
-    mockEvents.getCheckpointStatus.mockResolvedValue({
+    mockPollerHealth.getCheckpointStatus.mockResolvedValue({
       ...healthyStatus,
       consecutiveWriteFailures: 3,
       lastWriteError: 'connection reset',

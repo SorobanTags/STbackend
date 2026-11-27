@@ -1,8 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UnauthorizedException } from '@nestjs/common';
+import { UnauthorizedException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OtpService, TooManyRequestsException } from './otp.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { SmsService } from '../../common/sms/sms.service';
 
 describe('OtpService', () => {
   let service: OtpService;
@@ -29,12 +30,17 @@ describe('OtpService', () => {
     }),
   };
 
+  const mockSmsService = {
+    sendSms: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OtpService,
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: SmsService, useValue: mockSmsService },
       ],
     }).compile();
 
@@ -43,6 +49,7 @@ describe('OtpService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    jest.restoreAllMocks();
   });
 
   describe('sendOtp', () => {
@@ -60,6 +67,7 @@ describe('OtpService', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+      mockSmsService.sendSms.mockResolvedValue(undefined);
 
       await service.sendOtp('user-123', '+254712345678', 'KE');
 
@@ -88,6 +96,7 @@ describe('OtpService', () => {
     it('should enforce rate limiting', async () => {
       mockPrismaService.phoneOtp.updateMany.mockResolvedValue({ count: 0 });
       mockPrismaService.phoneOtp.create.mockResolvedValue({} as any);
+      mockSmsService.sendSms.mockResolvedValue(undefined);
 
       // First 3 requests should succeed
       await service.sendOtp('user-123', '+254712345678', 'KE');
@@ -98,6 +107,96 @@ describe('OtpService', () => {
       await expect(
         service.sendOtp('user-123', '+254712345678', 'KE'),
       ).rejects.toThrow(TooManyRequestsException);
+    });
+
+    it('should not log the OTP when NODE_ENV=production and no SMS client is configured', async () => {
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: any) => {
+        const config: Record<string, any> = { NODE_ENV: 'production' };
+        return config[key] ?? defaultValue;
+      });
+      mockPrismaService.phoneOtp.updateMany.mockResolvedValue({ count: 0 });
+      mockPrismaService.phoneOtp.create.mockResolvedValue({
+        id: 'otp-123',
+        userId: 'user-123',
+        phoneNumber: '+254712345678',
+        countryCode: 'KE',
+        otp: '123456',
+        attemptCount: 0,
+        expiresAt: new Date(),
+        isUsed: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      mockSmsService.sendSms.mockResolvedValue(undefined);
+
+      const logSpy = jest.spyOn((service as any).logger, 'log').mockImplementation(() => undefined);
+      const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+
+      await service.sendOtp('user-123', '+254712345678', 'KE');
+
+      const loggedMessages = [
+        ...logSpy.mock.calls.map((c) => String(c[0])),
+        ...warnSpy.mock.calls.map((c) => String(c[0])),
+      ];
+      const createdOtp = mockPrismaService.phoneOtp.create.mock.calls[0][0].data.otp;
+      expect(loggedMessages.some((m) => m.includes(createdOtp))).toBe(false);
+    });
+
+    it('should invalidate the OTP row and throw ServiceUnavailableException when SMS send fails', async () => {
+      mockPrismaService.phoneOtp.updateMany.mockResolvedValue({ count: 0 });
+      mockPrismaService.phoneOtp.create.mockResolvedValue({
+        id: 'otp-123',
+        userId: 'user-123',
+        phoneNumber: '+254712345678',
+        countryCode: 'KE',
+        otp: '123456',
+        attemptCount: 0,
+        expiresAt: new Date(),
+        isUsed: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      mockPrismaService.phoneOtp.update.mockResolvedValue({} as any);
+      mockSmsService.sendSms.mockRejectedValue(new Error('SMS transport down'));
+
+      await expect(
+        service.sendOtp('user-123', '+254712345678', 'KE'),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      expect(mockPrismaService.phoneOtp.update).toHaveBeenCalledWith({
+        where: { id: 'otp-123' },
+        data: { isUsed: true },
+      });
+    });
+
+    it('should generate 6-digit numeric OTPs within range', async () => {
+      mockPrismaService.phoneOtp.updateMany.mockResolvedValue({ count: 0 });
+      mockPrismaService.phoneOtp.create.mockResolvedValue({} as any);
+
+      for (let i = 0; i < 1000; i++) {
+        await service.sendOtp('user-123', '+254712345678', 'KE');
+      }
+
+      expect(mockPrismaService.phoneOtp.create).toHaveBeenCalledTimes(1000);
+
+      for (const call of mockPrismaService.phoneOtp.create.mock.calls) {
+        const otp = call[0].data.otp as string;
+        expect(otp).toMatch(/^\d{6}$/);
+        const numeric = Number(otp);
+        expect(numeric).toBeGreaterThanOrEqual(100000);
+        expect(numeric).toBeLessThanOrEqual(999999);
+      }
+    });
+
+    it('should not use Math.random when generating OTPs', async () => {
+      mockPrismaService.phoneOtp.updateMany.mockResolvedValue({ count: 0 });
+      mockPrismaService.phoneOtp.create.mockResolvedValue({} as any);
+
+      const randomSpy = jest.spyOn(Math, 'random');
+
+      await service.sendOtp('user-123', '+254712345678', 'KE');
+
+      expect(randomSpy).not.toHaveBeenCalled();
     });
   });
 

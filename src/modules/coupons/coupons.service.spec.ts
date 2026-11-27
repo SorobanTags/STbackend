@@ -167,6 +167,55 @@ describe('CouponsService (Issue #145) — Validation of expiresAt and discount b
         'Maximum redemptions cannot be negative',
       );
     });
+
+    it('should reject a lowercase or too-short code with BadRequestException', async () => {
+      const dto: CreateCouponDto = {
+        code: 'ab',
+        discountType: DiscountType.PERCENTAGE,
+        discountValue: 10,
+      };
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(BadRequestException);
+      await expect(service.create('user-1', dto)).rejects.toThrow(
+        'Coupon code must be 3-50 characters',
+      );
+    });
+
+    it('should persist the code as uppercased and trimmed', async () => {
+      const dto: CreateCouponDto = {
+        code: '  save20  ',
+        discountType: DiscountType.PERCENTAGE,
+        discountValue: 20,
+      };
+
+      mockPrisma.coupon.findUnique.mockResolvedValue(null);
+      mockPrisma.coupon.create.mockResolvedValue({
+        ...mockExistingCoupon,
+        code: 'SAVE20',
+      });
+
+      await service.create('user-1', dto);
+
+      expect(mockPrisma.coupon.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ code: 'SAVE20' }),
+        }),
+      );
+    });
+
+    it('should throw ConflictException when the code already exists', async () => {
+      const dto: CreateCouponDto = {
+        code: 'SAVE20',
+        discountType: DiscountType.PERCENTAGE,
+        discountValue: 20,
+      };
+
+      mockPrisma.coupon.findUnique.mockResolvedValue(mockExistingCoupon);
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(
+        'SAVE20',
+      );
+    });
   });
 
   describe('CouponsService.update', () => {

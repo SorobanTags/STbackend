@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { SmsTemplateKey, UserRole } from '@prisma/client';
+import * as request from 'supertest';
 import { SmsController } from './sms.controller';
 import { SmsService } from './sms.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -34,7 +36,16 @@ describe('SmsController', () => {
       mockSmsService.sendSms.mockResolvedValue({ id: 'sms-1' });
       const templateKey = Object.values(SmsTemplateKey)[0] as SmsTemplateKey;
 
-      const res = await controller.sendSms('5551234', '+1', 'user-1', templateKey, { name: 'Ada' }, 'hi');
+      const dto = {
+        phoneNumber: '5551234',
+        countryCode: '+1',
+        userId: 'user-1',
+        templateKey,
+        templateData: { name: 'Ada' },
+        message: 'hi',
+      };
+
+      const res = await controller.sendSms(dto);
 
       expect(mockSmsService.sendSms).toHaveBeenCalledWith({
         phoneNumber: '5551234',
@@ -45,6 +56,48 @@ describe('SmsController', () => {
         message: 'hi',
       });
       expect(res).toEqual({ id: 'sms-1' });
+    });
+  });
+
+  describe('sendSms validation', () => {
+    let app: INestApplication;
+
+    beforeAll(async () => {
+      const moduleRef: TestingModule = await Test.createTestingModule({
+        controllers: [SmsController],
+        providers: [{ provide: SmsService, useValue: mockSmsService }],
+      })
+        .overrideGuard(JwtAuthGuard)
+        .useValue({ canActivate: () => true })
+        .overrideGuard(RolesGuard)
+        .useValue({ canActivate: () => true })
+        .compile();
+
+      app = moduleRef.createNestApplication();
+      app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+      await app.init();
+    });
+
+    afterAll(async () => {
+      await app.close();
+    });
+
+    it('returns 400 when phoneNumber is missing', async () => {
+      await request(app.getHttpServer())
+        .post('/notifications/sms/send')
+        .send({ countryCode: '+1' })
+        .expect(400);
+
+      expect(mockSmsService.sendSms).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when templateKey is unknown', async () => {
+      await request(app.getHttpServer())
+        .post('/notifications/sms/send')
+        .send({ phoneNumber: '5551234', countryCode: '+1', templateKey: 'NOT_A_TEMPLATE' })
+        .expect(400);
+
+      expect(mockSmsService.sendSms).not.toHaveBeenCalled();
     });
   });
 

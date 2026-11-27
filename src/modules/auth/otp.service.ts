@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { CacheService } from '../../common/cache/cache.service';
 
 export class TooManyRequestsException extends HttpException {
   constructor(message: string = 'Too Many Requests') {
@@ -20,16 +21,17 @@ const OTP_EXPIRY_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const OTP_RATE_LIMIT_MAX_REQUESTS = 3; // max 3 OTP requests per minute per phone
+const OTP_RATE_LIMIT_WINDOW_SECONDS = OTP_RATE_LIMIT_WINDOW_MS / 1000;
 
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
   private readonly smsClient: any;
-  private readonly rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly cache: CacheService,
   ) {
     const username = this.config.get<string>('AFRICASTALKING_USERNAME');
     const apiKey = this.config.get<string>('AFRICASTALKING_API_KEY');
@@ -51,29 +53,25 @@ export class OtpService {
   }
 
   /**
-   * Check rate limiting for OTP requests
+   * Check rate limiting for OTP requests using the shared cache store.
+   * Uses an increment-with-TTL pattern so the counter is shared across
+   * instances and expires automatically with the window.
    */
-  private checkRateLimit(phoneNumber: string): void {
-    const now = Date.now();
-    const record = this.rateLimitMap.get(phoneNumber);
+  private async checkRateLimit(phoneNumber: string): Promise<void> {
+    const key = `otp:rate-limit:${phoneNumber}`;
 
-    if (!record || now > record.resetAt) {
-      // Reset or create new rate limit window
-      this.rateLimitMap.set(phoneNumber, {
-        count: 1,
-        resetAt: now + OTP_RATE_LIMIT_WINDOW_MS,
-      });
-      return;
-    }
+    const current = (await this.cache.get<number>(key)) ?? 0;
 
-    if (record.count >= OTP_RATE_LIMIT_MAX_REQUESTS) {
-      const remainingSeconds = Math.ceil((record.resetAt - now) / 1000);
+    if (current >= OTP_RATE_LIMIT_MAX_REQUESTS) {
+      const ttl = await this.cache.ttl(key);
+      const remainingSeconds = ttl > 0 ? ttl : OTP_RATE_LIMIT_WINDOW_SECONDS;
       throw new TooManyRequestsException(
         `Too many OTP requests. Please try again in ${remainingSeconds} seconds.`,
       );
     }
 
-    record.count += 1;
+    const next = current + 1;
+    await this.cache.set(key, next, OTP_RATE_LIMIT_WINDOW_SECONDS);
   }
 
   /**
@@ -81,7 +79,7 @@ export class OtpService {
    */
   async sendOtp(userId: string, phoneNumber: string, countryCode: string): Promise<void> {
     // Rate limit check
-    this.checkRateLimit(phoneNumber);
+    await this.checkRateLimit(phoneNumber);
 
     // Invalidate any existing unused OTPs for this user and phone
     await this.prisma.phoneOtp.updateMany({

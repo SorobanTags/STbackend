@@ -175,15 +175,20 @@ export class ExamsService {
       throw new BadRequestException('Exam contains no questions');
     }
 
-    const validQuestionIds = new Set(questions.map((q) => q.id));
+    const expectedQuestionIds = new Set(questions.map((q) => q.id));
     const submittedQuestionIds = Object.keys(dto.answers);
+    const uniqueSubmittedQuestionIds = new Set(submittedQuestionIds);
 
-    for (const submittedId of submittedQuestionIds) {
-      if (!validQuestionIds.has(submittedId)) {
-        throw new BadRequestException(
-          `Question ID ${submittedId} does not belong to exam ${examId}`,
-        );
-      }
+    if (
+      submittedQuestionIds.length !== uniqueSubmittedQuestionIds.size ||
+      submittedQuestionIds.length !== expectedQuestionIds.size ||
+      [...expectedQuestionIds].some(
+        (expectedId) => !uniqueSubmittedQuestionIds.has(expectedId),
+      )
+    ) {
+      throw new BadRequestException(
+        'Submitted answers must include each exam question exactly once',
+      );
     }
 
     let earnedPoints = 0;

@@ -27,6 +27,7 @@ import {
   NestMiddleware,
   UnauthorizedException,
   ForbiddenException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
@@ -83,15 +84,44 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
   ) {
     this.defaultSecret = this.config.get<string>('WEBHOOK_SECRET');
 
-    if (!this.defaultSecret) {
+    const configuredProviders = Object.keys(process.env)
+      .filter(
+        (key) =>
+          key.startsWith('WEBHOOK_SECRET_') &&
+          Boolean(process.env[key]),
+      )
+      .map((key) => key.slice('WEBHOOK_SECRET_'.length).toLowerCase())
+      .sort();
+
+    this.logger.log(
+      `Provider-specific webhook secrets configured for: ${
+        configuredProviders.length > 0 ? configuredProviders.join(', ') : 'none'
+      }`,
+    );
+
+    if (!this.defaultSecret && configuredProviders.length === 0) {
       this.logger.warn(
-        'WEBHOOK_SECRET is not set. All webhook requests will be rejected ' +
-          'unless a provider-specific WEBHOOK_SECRET_<NAME> is configured.',
+        'WEBHOOK_SECRET is not set and no provider-specific webhook secrets are configured. ' +
+          'All webhook requests will be rejected.',
       );
     }
   }
 
-  use(req: Request & { rawBody?: Buffer }, _res: Response, next: NextFunction) {
+  use(req: Request & { rawBody?: Buffer } & Record<string, unknown>, _res: Response, next: NextFunction) {
+    // ------------------------------------------------------------------ //
+    // 0. Check whether WebhookSkipGuard already stamped this request.
+    //    Routes decorated with @SkipWebhookSignature() have the guard run
+    //    first; it sets req['_webhookSignatureSkipped'] = true so the
+    //    middleware can honour the opt-out without needing Reflector access.
+    // ------------------------------------------------------------------ //
+    if (req['_webhookSignatureSkipped'] === true) {
+      this.logger.debug(
+        `Webhook signature check skipped for ${req.method} ${req.originalUrl} ` +
+          `(route is decorated with @SkipWebhookSignature())`,
+      );
+      return next();
+    }
+
     // ------------------------------------------------------------------ //
     // 1. Find the incoming signature header.
     // ------------------------------------------------------------------ //
@@ -132,20 +162,24 @@ export class WebhookSignatureMiddleware implements NestMiddleware {
         `No webhook secret configured for provider="${provider ?? 'default'}". ` +
           `Set WEBHOOK_SECRET${provider ? `_${provider.toUpperCase()}` : ''} in your environment.`,
       );
-      throw new ForbiddenException('Webhook endpoint is not configured.');
+      throw new UnauthorizedException(
+        `No webhook secret configured for ${
+          provider ? `provider "${provider}"` : 'the default route'
+        }.`,
+      );
     }
 
     // ------------------------------------------------------------------ //
     // 3. Require a raw body — needs { rawBody: true } in NestFactory.create.
     // ------------------------------------------------------------------ //
-    if (!req.rawBody || req.rawBody.length === 0) {
+    if (req.rawBody === undefined) {
       this.logger.error(
         'rawBody is unavailable. Ensure NestFactory.create is called with ' +
           '{ rawBody: true } in main.ts.',
       );
       // Treat as a server configuration problem, not a client error.
-      throw new ForbiddenException(
-        'Webhook signature verification is misconfigured on the server.',
+      throw new InternalServerErrorException(
+        'Webhook raw body is unavailable; signature verification cannot proceed.',
       );
     }
 

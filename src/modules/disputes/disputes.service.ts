@@ -4,9 +4,17 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { DisputeStatus, DisputeReferenceType, NotificationType } from '@prisma/client';
+import {
+  DisputeStatus, DisputeReferenceType, NotificationType, AuditAction, AuditTargetType,
+} from '@prisma/client';
 import { FileDisputeDto } from './dto/file-dispute.dto';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
+
+const DISPUTE_AUDIT_ACTIONS: Partial<Record<DisputeStatus, AuditAction>> = {
+  [DisputeStatus.RESOLVED]: AuditAction.DISPUTE_RESOLVED,
+  [DisputeStatus.REJECTED]: AuditAction.DISPUTE_REJECTED,
+  [DisputeStatus.CLOSED]: AuditAction.DISPUTE_CLOSED,
+};
 
 @Injectable()
 export class DisputesService {
@@ -142,15 +150,29 @@ export class DisputesService {
     }
 
     // Conditional on the observed status so a concurrent admin action loses instead of overwriting
-    const { count } = await this.prisma.dispute.updateMany({
-      where: { id, status: dispute.status },
-      data: {
-        status: dto.status,
-        adminNotes: dto.adminNotes,
-        resolvedById: adminId,
-        resolvedAt: new Date(),
-      },
-    });
+    const auditAction = DISPUTE_AUDIT_ACTIONS[dto.status];
+    const [count] = await this.prisma.$transaction([
+      this.prisma.dispute.updateMany({
+        where: { id, status: dispute.status },
+        data: {
+          status: dto.status,
+          adminNotes: dto.adminNotes,
+          resolvedById: adminId,
+          resolvedAt: new Date(),
+        },
+      }),
+      ...(auditAction
+        ? [this.prisma.adminAuditLog.create({
+            data: {
+              actorId: adminId,
+              action: auditAction,
+              targetType: AuditTargetType.DISPUTE,
+              targetId: id,
+              metadata: { from: dispute.status, to: dto.status, adminNotes: dto.adminNotes },
+            },
+          })]
+        : []),
+    ]);
     if (count === 0) {
       throw new ConflictException('Dispute was modified concurrently; reload and retry');
     }
@@ -185,8 +207,9 @@ export class DisputesService {
   // ----------------------------------------------------------
 
   /**
-   * Ensures the referenced enrollment or payment belongs to the student
-   * before allowing them to file a dispute.
+   * Ensures the referenced record belongs to the student before allowing
+   * them to file a dispute. Every DisputeReferenceType value must have an
+   * ownership check here — this is the only guard on the student write path.
    */
   private async validateReference(
     studentId: string,
@@ -217,6 +240,20 @@ export class DisputesService {
         );
       }
       return enrollment;
+    }
+
+    // ASSIGNMENT — referenceId is an assignment id
+    if (referenceType === DisputeReferenceType.ASSIGNMENT) {
+      const assignment = await this.prisma.assignment.findUnique({
+        where: { id: referenceId },
+      });
+      if (!assignment) {
+        throw new NotFoundException(`Assignment ${referenceId} not found`);
+      }
+      if (assignment.studentId !== studentId) {
+        throw new ForbiddenException('You can only dispute your own assignments');
+      }
+      return assignment;
     }
 
     throw new BadRequestException('Invalid reference type');

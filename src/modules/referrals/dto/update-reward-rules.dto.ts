@@ -25,6 +25,6 @@ export class UpdateRewardRulesDto {
   @ApiProperty({ required: false, example: 50, description: 'Max referrer rewards a single user may earn' })
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(0)
   maxRewardsPerReferrer?: number;
 }

@@ -98,29 +98,32 @@ export class LessonsService {
   ) {
     const module = await this.verifyModuleOwnership(moduleId, user);
 
-    const lesson = await this.prisma.lesson.create({
-      data: {
-        moduleId,
-        title:         data.title,
-        description:   data.description,
-        type:          data.type as any ?? 'VIDEO',
-        videoUrl:      data.videoUrl,
-        videoDuration: data.videoDuration,
-        thumbnailUrl:  data.thumbnailUrl,
-        content:       data.content,
-        resourceUrl:   data.resourceUrl,
-        position:      data.position,
-        isFree:        data.isFree ?? false,
-      },
-    });
+    // Insert and counter increment commit together so totalLessons cannot drift
+    return this.prisma.$transaction(async (tx) => {
+      const lesson = await tx.lesson.create({
+        data: {
+          moduleId,
+          title:         data.title,
+          description:   data.description,
+          type:          data.type as any ?? 'VIDEO',
+          videoUrl:      data.videoUrl,
+          videoDuration: data.videoDuration,
+          thumbnailUrl:  data.thumbnailUrl,
+          content:       data.content,
+          resourceUrl:   data.resourceUrl,
+          position:      data.position,
+          isFree:        data.isFree ?? false,
+        },
+      });
 
-    // Update totalLessons on the course
-    await this.prisma.course.update({
-      where: { id: module.courseId },
-      data: { totalLessons: { increment: 1 } },
-    });
+      // Update totalLessons on the course
+      await tx.course.update({
+        where: { id: module.courseId },
+        data: { totalLessons: { increment: 1 } },
+      });
 
-    return lesson;
+      return lesson;
+    });
   }
 
   async findLesson(lessonId: string) {

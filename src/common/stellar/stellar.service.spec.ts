@@ -1,4 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
+import { Networks, SorobanRpc } from '@stellar/stellar-sdk';
 import { StellarService } from './stellar.service';
 
 const mockServer = {
@@ -20,67 +22,141 @@ jest.mock('@stellar/stellar-sdk', () => {
       ...(actual.rpc ?? {}),
       Server: jest.fn().mockImplementation(() => mockServer),
     },
+    SorobanRpc: {
+      ...actual.SorobanRpc,
+      Server: jest.fn().mockImplementation(() => mockServer),
+    },
     Contract: jest.fn().mockImplementation(() => mockContract),
   };
 });
 
 describe('StellarService', () => {
   let service: StellarService;
+  let configService: { get: jest.Mock };
+  let mockServer: { getNetworkPassphrase: jest.Mock; getEvents: jest.Mock };
 
-  beforeEach(async () => {
-    jest.clearAllMocks();
+  const buildConfig = (values: Record<string, string | undefined>) => ({
+    get: jest.fn((key: string) => values[key]),
+  });
 
+  const createService = async (values: Record<string, string | undefined>) => {
+    configService = buildConfig(values);
     const module: TestingModule = await Test.createTestingModule({
-      providers: [StellarService],
+      providers: [
+        StellarService,
+        { provide: ConfigService, useValue: configService },
+      ],
     }).compile();
+    return module.get<StellarService>(StellarService);
+  };
 
-    service = module.get<StellarService>(StellarService);
+  beforeEach(() => {
+    mockServer = {
+      getNetworkPassphrase: jest.fn().mockReturnValue(Networks.TESTNET),
+      getEvents: jest.fn(),
+    };
+    (SorobanRpc.Server as unknown as jest.Mock).mockImplementation(
+      () => mockServer,
+    );
   });
 
-  it('should be defined', () => {
-    expect(service).toBeDefined();
+  afterEach(() => {
+    jest.clearAllMocks();
+    jest.useRealTimers();
   });
 
-  describe('successful contract simulation', () => {
-    it('returns the parsed simulation result', async () => {
-      const parsedResult = { result: 'ok' };
-      mockServer.simulateTransaction.mockResolvedValue({
-        result: parsedResult,
-        error: undefined,
+  describe('onModuleInit', () => {
+    it('throws naming STELLAR_RPC_URL when it is unset', async () => {
+      service = await createService({
+        STELLAR_RPC_URL: undefined,
+        STELLAR_NETWORK: 'testnet',
+        SOROBANLARD_CONTRACT_ID: 'CABC123',
       });
 
-      const result = await (service as any).simulateContractCall(
-        'CONTRACT_ID',
-        'method',
-        [],
-      );
+      expect(() => service.onModuleInit()).toThrow(/STELLAR_RPC_URL/);
+    });
 
-      expect(mockServer.simulateTransaction).toHaveBeenCalled();
-      expect(result).toEqual(parsedResult);
+    it('throws naming SOROBANLARD_CONTRACT_ID when it is unset', async () => {
+      service = await createService({
+        STELLAR_RPC_URL: 'https://rpc.example.com',
+        STELLAR_NETWORK: 'testnet',
+        SOROBANLARD_CONTRACT_ID: undefined,
+      });
+
+      expect(() => service.onModuleInit()).toThrow(/SOROBANLARD_CONTRACT_ID/);
+    });
+
+    it('throws for an unknown STELLAR_NETWORK value', async () => {
+      service = await createService({
+        STELLAR_RPC_URL: 'https://rpc.example.com',
+        STELLAR_NETWORK: 'mainet',
+        SOROBANLARD_CONTRACT_ID: 'CABC123',
+      });
+
+      expect(() => service.onModuleInit()).toThrow(/STELLAR_NETWORK/);
+    });
+
+    it('selects Networks.PUBLIC for mainnet', async () => {
+      service = await createService({
+        STELLAR_RPC_URL: 'https://rpc.example.com',
+        STELLAR_NETWORK: 'mainnet',
+        SOROBANLARD_CONTRACT_ID: 'CABC123',
+      });
+
+      service.onModuleInit();
+
+      expect(SorobanRpc.Server).toHaveBeenCalledWith('https://rpc.example.com', {
+        allowHttp: true,
+      });
+      expect(service.getNetworkPassphrase()).toBe(Networks.PUBLIC);
+    });
+
+    it('selects Networks.TESTNET for testnet', async () => {
+      service = await createService({
+        STELLAR_RPC_URL: 'https://rpc.example.com',
+        STELLAR_NETWORK: 'testnet',
+        SOROBANLARD_CONTRACT_ID: 'CABC123',
+      });
+
+      service.onModuleInit();
+
+      expect(service.getNetworkPassphrase()).toBe(Networks.TESTNET);
     });
   });
 
-  describe('simulation error', () => {
-    it('throws when the simulation response contains an error', async () => {
-      mockServer.simulateTransaction.mockResolvedValue({
-        error: 'simulation failed',
+  describe('fetchContractEvents', () => {
+    beforeEach(async () => {
+      service = await createService({
+        STELLAR_RPC_URL: 'https://rpc.example.com',
+        STELLAR_NETWORK: 'testnet',
+        SOROBANLARD_CONTRACT_ID: 'CABC123',
       });
-
-      await expect(
-        (service as any).simulateContractCall('CONTRACT_ID', 'method', []),
-      ).rejects.toThrow();
+      service.onModuleInit();
     });
-  });
 
-  describe('RPC rejection', () => {
-    it('propagates a rejected RPC call as an error', async () => {
-      mockServer.simulateTransaction.mockRejectedValue(
-        new Error('network error'),
-      );
+    it('rejects after maxAttempts when getEvents keeps failing', async () => {
+      jest.useFakeTimers();
+      const error = new Error('RPC unavailable');
+      mockServer.getEvents.mockRejectedValue(error);
 
-      await expect(
-        (service as any).simulateContractCall('CONTRACT_ID', 'method', []),
-      ).rejects.toThrow();
+      const promise = service.fetchContractEvents(1);
+      // Attach a catch handler immediately to avoid unhandled rejection warnings.
+      const assertion = expect(promise).rejects.toThrow('RPC unavailable');
+
+      // Advance through the exponential backoff delays.
+      await jest.runAllTimersAsync();
+
+      await assertion;
+      expect(mockServer.getEvents).toHaveBeenCalledTimes(3);
+    });
+
+    it('returns [] for a successful empty response', async () => {
+      mockServer.getEvents.mockResolvedValue({ events: [] });
+
+      const result = await service.fetchContractEvents(1);
+
+      expect(result).toEqual([]);
+      expect(mockServer.getEvents).toHaveBeenCalledTimes(1);
     });
   });
 });

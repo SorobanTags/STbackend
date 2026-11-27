@@ -1,5 +1,6 @@
 // reviews.service.ts
 import { Injectable, NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { EnrollmentsService } from '../enrollments/enrollments.service';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -26,13 +27,13 @@ export class ReviewsService {
     });
     if (existing) throw new ConflictException('You have already reviewed this course');
 
-    const review = await this.prisma.courseReview.create({
-      data: { courseId, studentId, rating: dto.rating, comment: dto.comment },
+    return this.prisma.$transaction(async (tx) => {
+      const review = await tx.courseReview.create({
+        data: { courseId, studentId, rating: dto.rating, comment: dto.comment },
+      });
+      await this.recomputeCourseRating(courseId, tx);
+      return review;
     });
-
-    await this.recomputeCourseRating(courseId);
-
-    return review;
   }
 
   async findForCourse(courseId: string, page = 1, limit = 20) {
@@ -59,16 +60,17 @@ export class ReviewsService {
     if (!review) throw new NotFoundException('Review not found');
     if (review.studentId !== studentId) throw new ForbiddenException('You cannot edit this review');
 
-    const updated = await this.prisma.courseReview.update({
-      where: { courseId_studentId: { courseId, studentId } },
-      data: {
-        ...(dto.rating !== undefined && { rating: dto.rating }),
-        ...(dto.comment !== undefined && { comment: dto.comment }),
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.courseReview.update({
+        where: { courseId_studentId: { courseId, studentId } },
+        data: {
+          ...(dto.rating !== undefined && { rating: dto.rating }),
+          ...(dto.comment !== undefined && { comment: dto.comment }),
+        },
+      });
+      await this.recomputeCourseRating(courseId, tx);
+      return updated;
     });
-
-    await this.recomputeCourseRating(courseId);
-    return updated;
   }
 
   async deleteMyReview(studentId: string, courseId: string) {
@@ -78,31 +80,34 @@ export class ReviewsService {
     if (!review) throw new NotFoundException('Review not found');
     if (review.studentId !== studentId) throw new ForbiddenException('You cannot delete this review');
 
-    await this.prisma.courseReview.delete({
-      where: { courseId_studentId: { courseId, studentId } },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.courseReview.delete({
+        where: { courseId_studentId: { courseId, studentId } },
+      });
+      await this.recomputeCourseRating(courseId, tx);
+      return { message: 'Review deleted' };
     });
-
-    await this.recomputeCourseRating(courseId);
-    return { message: 'Review deleted' };
   }
 
   async adminDeleteReview(reviewId: string) {
     const review = await this.prisma.courseReview.findUnique({ where: { id: reviewId } });
     if (!review) throw new NotFoundException('Review not found');
 
-    await this.prisma.courseReview.delete({ where: { id: reviewId } });
-    await this.recomputeCourseRating(review.courseId);
-    return { message: 'Review deleted by admin' };
+    return this.prisma.$transaction(async (tx) => {
+      await tx.courseReview.delete({ where: { id: reviewId } });
+      await this.recomputeCourseRating(review.courseId, tx);
+      return { message: 'Review deleted by admin' };
+    });
   }
 
-  private async recomputeCourseRating(courseId: string) {
-    const agg = await this.prisma.courseReview.aggregate({
+  private async recomputeCourseRating(courseId: string, tx: Prisma.TransactionClient) {
+    const agg = await tx.courseReview.aggregate({
       where: { courseId },
       _avg: { rating: true },
       _count: { _all: true },
     });
 
-    await this.prisma.course.update({
+    await tx.course.update({
       where: { id: courseId },
       data: {
         avgRating: agg._avg.rating ?? 0,

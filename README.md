@@ -914,3 +914,8 @@ Verification Matrix & Final Checklist
 
 MIT
 ```
+
+## Handsoff notes
+
+<!-- handsoff-issue-82 -->
+- #82: Add tests for QueueService job enqueueing and failure handling

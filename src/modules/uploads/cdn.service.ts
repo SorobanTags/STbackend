@@ -45,6 +45,9 @@ export interface MediaDeliveryUrls {
   expiresAt?: string;
 }
 
+const DEFAULT_SIGNED_URL_TTL_SECONDS = 3600;
+const MIN_SIGNING_SECRET_LENGTH = 32;
+
 @Injectable()
 export class CdnService {
   private readonly logger = new Logger(CdnService.name);
@@ -64,14 +67,25 @@ export class CdnService {
         this.config.get<string>('APP_BASE_URL', 'http://localhost:3000'),
       ),
     );
-    this.signingSecret = this.config.get<string>(
-      'CDN_SIGNING_SECRET',
-      'sorobanlard-cdn-dev-secret',
-    );
-    this.defaultSignedTtl = this.config.get<number>(
+    const configuredSecret = this.config.get<string>('CDN_SIGNING_SECRET');
+    if (
+      this.config.get<string>('NODE_ENV') === 'production' &&
+      (!configuredSecret || configuredSecret.length < MIN_SIGNING_SECRET_LENGTH)
+    ) {
+      throw new Error(
+        `CDN_SIGNING_SECRET must be explicitly configured with at least ${MIN_SIGNING_SECRET_LENGTH} characters in production`,
+      );
+    }
+    this.signingSecret = configuredSecret ?? 'sorobanlard-cdn-dev-secret';
+
+    const configuredTtl = this.config.get<string | number>(
       'CDN_SIGNED_URL_TTL_SECONDS',
-      3600,
     );
+    const parsedTtl = Number(configuredTtl);
+    this.defaultSignedTtl =
+      Number.isSafeInteger(parsedTtl) && parsedTtl > 0
+        ? parsedTtl
+        : DEFAULT_SIGNED_URL_TTL_SECONDS;
   }
 
   /**

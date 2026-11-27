@@ -149,4 +149,107 @@ describe('PayoutsService', () => {
       expect(mockKyc.getVerificationStatus).not.toHaveBeenCalled();
     });
   });
+
+  describe('createPayout — idempotency window', () => {
+    const baseDto: any = {
+      instructorId: 'instructor-1',
+      amount: 200,
+      periodStart: '2024-01-01',
+      periodEnd: '2024-01-31',
+    };
+    const existingPayout = {
+      id: 'pay-existing',
+      instructorId: 'instructor-1',
+      amount: 200,
+      status: PayoutStatus.PENDING,
+      idempotencyKey: 'payout:instructor-1:2024-01-01:2024-01-31',
+      createdAt: new Date(),
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('returns the existing payout without calling create when duplicate key is inside the window', async () => {
+      jest.setSystemTime(new Date('2024-02-01T12:00:00Z'));
+      // existing payout created 1 hour ago — well inside the 24h window
+      const createdAt = new Date('2024-02-01T11:00:00Z');
+      mockPrisma.payout.findFirst.mockResolvedValue({ ...existingPayout, createdAt });
+
+      const result = await (service as any).createPayout(baseDto);
+
+      expect(result.id).toBe('pay-existing');
+      expect(mockPrisma.payout.create).not.toHaveBeenCalled();
+    });
+
+    it('creates a new payout when the duplicate key is outside the 24h window', async () => {
+      jest.setSystemTime(new Date('2024-02-03T12:00:00Z'));
+      // findFirst returns null — outside the window (the gte filter would exclude old rows)
+      mockPrisma.payout.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'instructor-1' });
+      mockKyc.getVerificationStatus.mockResolvedValue({ isVerified: true });
+      mockPrisma.payout.create.mockResolvedValue({
+        id: 'pay-new',
+        ...baseDto,
+        status: PayoutStatus.PENDING,
+      });
+
+      const result = await (service as any).createPayout(baseDto);
+
+      expect(result.id).toBe('pay-new');
+      expect(mockPrisma.payout.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('derives the idempotency key from instructorId, periodStart and periodEnd when no key is supplied', async () => {
+      mockPrisma.payout.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'instructor-1' });
+      mockKyc.getVerificationStatus.mockResolvedValue({ isVerified: true });
+      mockPrisma.payout.create.mockResolvedValue({
+        id: 'pay-derived',
+        idempotencyKey: 'payout:instructor-1:2024-01-01:2024-01-31',
+        status: PayoutStatus.PENDING,
+      });
+
+      await (service as any).createPayout(baseDto);
+
+      expect(mockPrisma.payout.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            idempotencyKey: 'payout:instructor-1:2024-01-01:2024-01-31',
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('exportPayoutStatement — aggregation', () => {
+    const requestingUser = { id: 'instructor-1', role: UserRole.INSTRUCTOR };
+
+    it('buckets amounts correctly by PayoutStatus', async () => {
+      const payouts = [
+        { id: 'p1', amount: '100', status: PayoutStatus.COMPLETED },
+        { id: 'p2', amount: '200', status: PayoutStatus.COMPLETED },
+        { id: 'p3', amount: '50', status: PayoutStatus.PENDING },
+        { id: 'p4', amount: '75', status: PayoutStatus.PROCESSING },
+        { id: 'p5', amount: '30', status: PayoutStatus.FAILED },
+      ];
+
+      mockPrisma.$transaction.mockResolvedValue([payouts, payouts.length]);
+
+      const result = await service.exportPayoutStatement(
+        requestingUser,
+        'instructor-1',
+        {},
+      );
+
+      expect(result.summary.totalCompletedAmount).toBe(300);
+      expect(result.summary.totalPendingAmount).toBe(125);
+      // FAILED is neither completed nor pending
+      expect(result.summary.totalCompletedAmount + result.summary.totalPendingAmount).toBe(425);
+    });
+  });
 });

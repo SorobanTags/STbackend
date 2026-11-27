@@ -4,9 +4,17 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { DisputeStatus, DisputeReferenceType, NotificationType } from '@prisma/client';
+import {
+  DisputeStatus, DisputeReferenceType, NotificationType, AuditAction, AuditTargetType,
+} from '@prisma/client';
 import { FileDisputeDto } from './dto/file-dispute.dto';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
+
+const DISPUTE_AUDIT_ACTIONS: Partial<Record<DisputeStatus, AuditAction>> = {
+  [DisputeStatus.RESOLVED]: AuditAction.DISPUTE_RESOLVED,
+  [DisputeStatus.REJECTED]: AuditAction.DISPUTE_REJECTED,
+  [DisputeStatus.CLOSED]: AuditAction.DISPUTE_CLOSED,
+};
 
 @Injectable()
 export class DisputesService {
@@ -135,15 +143,30 @@ export class DisputesService {
       );
     }
 
-    const updated = await this.prisma.dispute.update({
-      where: { id },
-      data: {
-        status: dto.status,
-        adminNotes: dto.adminNotes,
-        resolvedById: adminId,
-        resolvedAt: new Date(),
-      },
-    });
+    // shortcut: UNDER_REVIEW has no AuditAction, so that transition is not audited; add an enum value if it must be.
+    const auditAction = DISPUTE_AUDIT_ACTIONS[dto.status];
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.dispute.update({
+        where: { id },
+        data: {
+          status: dto.status,
+          adminNotes: dto.adminNotes,
+          resolvedById: adminId,
+          resolvedAt: new Date(),
+        },
+      }),
+      ...(auditAction
+        ? [this.prisma.adminAuditLog.create({
+            data: {
+              actorId: adminId,
+              action: auditAction,
+              targetType: AuditTargetType.DISPUTE,
+              targetId: id,
+              metadata: { from: dispute.status, to: dto.status, adminNotes: dto.adminNotes },
+            },
+          })]
+        : []),
+    ]);
 
     await this.notifications.notifyUser(
       dispute.filedById,

@@ -66,6 +66,11 @@ export class TagsService {
    */
   async create(adminId: string, dto: CreateTagDto) {
     const name = this.normalise(dto.label);
+    if (!name) {
+      throw new BadRequestException(
+        'Tag label must contain at least one alphanumeric character',
+      );
+    }
 
     const existing = await this.prisma.tag.findUnique({ where: { name } });
     if (existing) {
@@ -170,6 +175,11 @@ export class TagsService {
     if (!dto.label) return tag; // nothing to change
 
     const newName = this.normalise(dto.label);
+    if (!newName) {
+      throw new BadRequestException(
+        'Tag label must contain at least one alphanumeric character',
+      );
+    }
 
     // Check for a slug collision with a *different* tag
     if (newName !== tag.name) {

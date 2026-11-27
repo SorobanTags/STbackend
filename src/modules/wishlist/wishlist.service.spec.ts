@@ -39,6 +39,21 @@ describe('WishlistService (Issue #70)', () => {
       mockPrisma.wishlistItem.create.mockResolvedValue({
         id: 'wish-1',
         studentId: 'student-1',
+        courseId: 'cour
+      ],
+    }).compile();
+
+    service = module.get<WishlistService>(WishlistService);
+    jest.clearAllMocks();
+  });
+
+  describe('add', () => {
+    it('creates a wishlist item on the happy path', async () => {
+      mockPrisma.course.findFirst.mockResolvedValue({ id: 'course-1' });
+      mockPrisma.wishlistItem.findUnique.mockResolvedValue(null);
+      mockPrisma.wishlistItem.create.mockResolvedValue({
+        id: 'wish-1',
+        studentId: 'student-1',
         courseId: 'course-1',
       });
 
@@ -112,6 +127,38 @@ describe('WishlistService (Issue #70)', () => {
         data: items,
         meta: { total: 25, page: 3, limit: 10 },
       });
+    });
+  });
+
+  describe('findAll pagination clamping', () => {
+    it('clamps page 0 to page 1 and passes skip: 0', async () => {
+      const result = await service.findAll('student-1', 0, 20);
+
+      expect(prisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 20 }),
+      );
+      expect(result.meta.page).toBe(1);
+    });
+
+    it('clamps an oversized limit to 100 and passes take: 100', async () => {
+      const result = await service.findAll('student-1', 1, 5000);
+
+      expect(prisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 100 }),
+      );
+      expect(result.meta.limit).toBe(100);
+    });
+
+    it('keeps valid page and limit values unchanged', async () => {
+      const result = await service.findAll('student-1', 2, 10);
+
+      expect(prisma.wishlistItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 10, take: 10 }),
+      );
+      expect(result.meta.page).toBe(2);
+      expect(result.meta.limit).toBe(10);
+    });
+  });
     });
   });
 });

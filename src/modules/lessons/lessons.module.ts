@@ -1,5 +1,4 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { ScheduleModule } from '@nestjs/schedule';
 import { LessonsController } from './lessons.controller';
 import { LessonsService } from './lessons.service';
 import { DripScheduleService } from './drip-schedule.service';
@@ -8,7 +7,6 @@ import { EnrollmentsModule } from '../enrollments/enrollments.module';
 
 @Module({
   imports: [
-    ScheduleModule.forRoot(),
     NotificationsModule,
     forwardRef(() => EnrollmentsModule),
   ],
